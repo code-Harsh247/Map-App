@@ -5,6 +5,8 @@ import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 import '../providers/map_provider.dart';
 import '../providers/auth_provider.dart';
+import '../models/place_model.dart';
+import 'location_search_screen.dart';
 
 class MapHomeScreen extends StatefulWidget {
   const MapHomeScreen({Key? key}) : super(key: key);
@@ -13,26 +15,252 @@ class MapHomeScreen extends StatefulWidget {
   State<MapHomeScreen> createState() => _MapHomeScreenState();
 }
 
-class _MapHomeScreenState extends State<MapHomeScreen> {
+class _MapHomeScreenState extends State<MapHomeScreen>
+    with TickerProviderStateMixin {
   final MapController _mapController = MapController();
-  final TextEditingController _searchController = TextEditingController();
+  final TextEditingController _locationController = TextEditingController();
+  final TextEditingController _destinationController = TextEditingController();
+
+  late AnimationController _panelAnimController;
+  late Animation<Offset> _panelSlideAnimation;
+  bool _showNavPanel = false;
+
+  // Route panel state
+  late AnimationController _routePanelAnimController;
+  late Animation<Offset> _routePanelSlideAnimation;
+  late AnimationController _shadowAnimController;
+  late Animation<double> _shadowAnimation;
+  bool _showRoutePanel = false;
+  bool _routePanelMinimized = false;
+  late AnimationController _minimizedPanelAnimController;
+  late Animation<Offset> _minimizedPanelSlideAnimation;
+  final List<TextEditingController> _stopControllers = [];
 
   @override
   void initState() {
     super.initState();
+    _panelAnimController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 400),
+    );
+    _panelSlideAnimation = Tween<Offset>(
+      begin: const Offset(0, 1),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(
+      parent: _panelAnimController,
+      curve: Curves.easeOutCubic,
+    ));
+
+    _routePanelAnimController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 450),
+    );
+    _routePanelSlideAnimation = Tween<Offset>(
+      begin: const Offset(0, 1),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(
+      parent: _routePanelAnimController,
+      curve: Curves.easeOutCubic,
+    ));
+
+    _shadowAnimController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    );
+    _shadowAnimation = Tween<double>(
+      begin: 0.0,
+      end: 1.0,
+    ).animate(CurvedAnimation(
+      parent: _shadowAnimController,
+      curve: Curves.easeIn,
+    ));
+
+    _minimizedPanelAnimController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 350),
+    );
+    _minimizedPanelSlideAnimation = Tween<Offset>(
+      begin: const Offset(0, 1),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(
+      parent: _minimizedPanelAnimController,
+      curve: Curves.easeOutCubic,
+    ));
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final mapProvider = Provider.of<MapProvider>(context, listen: false);
       mapProvider.setMapController(_mapController);
-      // Fetch user's GPS location and center the map
       mapProvider.getUserLocation();
     });
+
+    _locationController.addListener(_onFieldChanged);
+    _destinationController.addListener(_onFieldChanged);
   }
 
   @override
   void dispose() {
-    _searchController.dispose();
+    _locationController.removeListener(_onFieldChanged);
+    _destinationController.removeListener(_onFieldChanged);
+    _locationController.dispose();
+    _destinationController.dispose();
+    _panelAnimController.dispose();
+    _routePanelAnimController.dispose();
+    _shadowAnimController.dispose();
+    _minimizedPanelAnimController.dispose();
+    for (final c in _stopControllers) {
+      c.dispose();
+    }
     _mapController.dispose();
     super.dispose();
+  }
+
+  void _onFieldChanged() {
+    setState(() {}); // rebuild to re-evaluate Find Route enabled state
+  }
+
+  Future<void> _openLocationSearch({
+    required String label,
+    required TextEditingController controller,
+    required Function(PlaceModel) onSelected,
+  }) async {
+    final result = await Navigator.push<PlaceModel>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => LocationSearchScreen(
+          fieldLabel: label,
+          initialValue: controller.text,
+        ),
+      ),
+    );
+    if (result != null && mounted) {
+      setState(() {
+        controller.text = result.fullAddress;
+      });
+      onSelected(result);
+    }
+  }
+
+  void _openNavPanel() {
+    setState(() => _showNavPanel = true);
+    _panelAnimController.forward();
+  }
+
+  void _closeNavPanel() {
+    _panelAnimController.reverse().then((_) {
+      if (mounted) setState(() => _showNavPanel = false);
+    });
+  }
+
+  void _onFindRoute() {
+    // Close nav panel, then open route panel with animated shadow
+    _panelAnimController.reverse().then((_) {
+      if (!mounted) return;
+      setState(() {
+        _showNavPanel = false;
+        _showRoutePanel = true;
+      });
+      _routePanelAnimController.forward();
+      // Delay shadow slightly for a staggered feel
+      Future.delayed(const Duration(milliseconds: 150), () {
+        if (mounted) _shadowAnimController.forward();
+      });
+    });
+  }
+
+  void _closeRoutePanel() {
+    _shadowAnimController.reverse();
+    _routePanelAnimController.reverse().then((_) {
+      if (!mounted) return;
+      setState(() {
+        _showRoutePanel = false;
+        _routePanelMinimized = false;
+        for (final c in _stopControllers) {
+          c.dispose();
+        }
+        _stopControllers.clear();
+      });
+    });
+  }
+
+  void _resetNavigation() {
+    final mp = Provider.of<MapProvider>(context, listen: false);
+    // Close whichever panel is showing
+    if (_routePanelMinimized) {
+      _minimizedPanelAnimController.reverse();
+    } else {
+      _routePanelAnimController.reverse();
+    }
+    _shadowAnimController.reverse();
+    // Clear all state
+    Future.delayed(const Duration(milliseconds: 350), () {
+      if (!mounted) return;
+      setState(() {
+        _showRoutePanel = false;
+        _routePanelMinimized = false;
+        _locationController.clear();
+        _destinationController.clear();
+        for (final c in _stopControllers) {
+          c.dispose();
+        }
+        _stopControllers.clear();
+      });
+      mp.reset();
+    });
+  }
+
+  void _minimizeRoutePanel() {
+    _routePanelAnimController.reverse().then((_) {
+      if (!mounted) return;
+      setState(() => _routePanelMinimized = true);
+      _minimizedPanelAnimController.forward();
+    });
+  }
+
+  void _expandRoutePanel() {
+    _minimizedPanelAnimController.reverse().then((_) {
+      if (!mounted) return;
+      setState(() => _routePanelMinimized = false);
+      _routePanelAnimController.forward();
+    });
+  }
+
+  void _addStop() async {
+    final result = await Navigator.push<PlaceModel>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const LocationSearchScreen(
+          fieldLabel: 'Add Stop',
+        ),
+      ),
+    );
+    if (result != null && mounted) {
+      final mp = Provider.of<MapProvider>(context, listen: false);
+      mp.addStop(result);
+      setState(() {
+        _stopControllers.add(TextEditingController(text: result.fullAddress));
+      });
+    }
+  }
+
+  void _removeStop(int index) {
+    if (index >= 0 && index < _stopControllers.length) {
+      final mp = Provider.of<MapProvider>(context, listen: false);
+      mp.removeStop(index);
+      setState(() {
+        _stopControllers[index].dispose();
+        _stopControllers.removeAt(index);
+      });
+    }
+  }
+
+  void _reorderStop(int oldIndex, int newIndex) {
+    if (newIndex > oldIndex) newIndex--;
+    final mp = Provider.of<MapProvider>(context, listen: false);
+    mp.reorderStops(oldIndex, newIndex);
+    setState(() {
+      final controller = _stopControllers.removeAt(oldIndex);
+      _stopControllers.insert(newIndex, controller);
+    });
   }
 
   List<Polyline> _buildPolylines(MapProvider mapProvider) {
@@ -145,15 +373,15 @@ class _MapHomeScreenState extends State<MapHomeScreen> {
   /// Current location "me" marker — concentric green circles
   Widget _buildMeMarker() {
     return SizedBox(
-      width: 30,
-      height: 30,
+      width: 24,
+      height: 24,
       child: Stack(
         alignment: Alignment.center,
         children: [
           // Outer glow circle
           Container(
-            width: 30,
-            height: 30,
+            width: 24,
+            height: 24,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: const Color(0xFFB1FF8E).withValues(alpha: 0.17),
@@ -161,8 +389,8 @@ class _MapHomeScreenState extends State<MapHomeScreen> {
           ),
           // Middle solid green circle
           Container(
-            width: 20,
-            height: 20,
+            width: 16,
+            height: 16,
             decoration: const BoxDecoration(
               shape: BoxShape.circle,
               color: Color(0xFFB1FF8E),
@@ -170,8 +398,8 @@ class _MapHomeScreenState extends State<MapHomeScreen> {
           ),
           // Inner dark circle
           Container(
-            width: 14,
-            height: 14,
+            width: 10,
+            height: 10,
             decoration: const BoxDecoration(
               shape: BoxShape.circle,
               color: Color(0xFF171717),
@@ -235,108 +463,40 @@ class _MapHomeScreenState extends State<MapHomeScreen> {
             ),
           ),
 
-          // ── Search bar + Profile avatar ──
+          // ── Hamburger menu button (top-left) ──
           Positioned(
-            top: topPadding + 10,
-            left: 8,
-            right: 8,
-            child: Container(
-              height: 75,
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: const Color(0xFF212121),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Row(
-                children: [
-                  // Search input area
-                  Expanded(
-                    child: Container(
-                      height: 55,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF292929),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: TextField(
-                        controller: _searchController,
-                        style: GoogleFonts.poppins(
-                          fontSize: 16,
-                          color: Colors.white,
-                        ),
-                        decoration: InputDecoration(
-                          hintText: 'Search Location',
-                          hintStyle: GoogleFonts.poppins(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w400,
-                            color: Colors.white,
-                          ),
-                          prefixIcon: Padding(
-                            padding: const EdgeInsets.only(left: 14, right: 10),
-                            child: Icon(
-                              Icons.search,
-                              color: Colors.white.withValues(alpha: 0.8),
-                              size: 24,
-                            ),
-                          ),
-                          prefixIconConstraints: const BoxConstraints(
-                            minWidth: 48,
-                            minHeight: 24,
-                          ),
-                          border: InputBorder.none,
-                          contentPadding:
-                              const EdgeInsets.symmetric(vertical: 16),
-                        ),
-                        onSubmitted: (value) {
-                          if (value.trim().isNotEmpty) {
-                            mapProvider.searchAddress(value);
-                          }
-                        },
-                      ),
+            top: topPadding + 12,
+            left: 14,
+            child: GestureDetector(
+              onTap: () => _showProfileMenu(context),
+              child: Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF212121),
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.3),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
                     ),
+                  ],
+                ),
+                child: const Center(
+                  child: Icon(
+                    Icons.menu,
+                    color: Colors.white,
+                    size: 22,
                   ),
-
-                  const SizedBox(width: 10),
-
-                  // Profile avatar
-                  GestureDetector(
-                    onTap: () {
-                      _showProfileMenu(context);
-                    },
-                    child: Container(
-                      width: 55,
-                      height: 55,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        gradient: const LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [
-                            Color(0xFFFFD2C2),
-                            Color(0xFFFFC9B3),
-                          ],
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.2),
-                            blurRadius: 6,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: const Icon(
-                        Icons.person,
-                        color: Color(0xFFD4845A),
-                        size: 30,
-                      ),
-                    ),
-                  ),
-                ],
+                ),
               ),
             ),
           ),
 
           // ── Compass button (bottom-right, above route button) ──
-          Positioned(
+          if (!_showNavPanel && !_showRoutePanel)
+            Positioned(
             right: 20,
             bottom: 170,
             child: GestureDetector(
@@ -364,7 +524,7 @@ class _MapHomeScreenState extends State<MapHomeScreen> {
                     ),
                   ],
                 ),
-                child: ClipOval(
+                child: Center(
                   child: Image.asset(
                     'assets/compass_icon.png',
                     width: 36,
@@ -377,16 +537,13 @@ class _MapHomeScreenState extends State<MapHomeScreen> {
           ),
 
           // ── Route / Navigate button (bottom-right) ──
-          Positioned(
-            right: 12,
-            bottom: 80,
-            child: GestureDetector(
-              onTap: () {
-                if (mapProvider.canOptimizeRoute && !mapProvider.isLoading) {
-                  mapProvider.findOptimizedRoute();
-                }
-              },
-              child: Container(
+          if (!_showNavPanel && !_showRoutePanel)
+            Positioned(
+              right: 12,
+              bottom: 80,
+              child: GestureDetector(
+                onTap: _openNavPanel,
+                child: Container(
                 width: 72,
                 height: 72,
                 decoration: BoxDecoration(
@@ -429,6 +586,55 @@ class _MapHomeScreenState extends State<MapHomeScreen> {
               ),
             ),
           ),
+
+          // ── Navigation Panel (slides up) ──
+          if (_showNavPanel)
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: SlideTransition(
+                position: _panelSlideAnimation,
+                child: _buildNavigationPanel(mapProvider),
+              ),
+            ),
+
+          // ── Tap-outside barrier to minimize route panel ──
+          if (_showRoutePanel && !_routePanelMinimized)
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _minimizeRoutePanel,
+                child: const SizedBox.expand(),
+              ),
+            ),
+
+          // ── Route Panel (slides up after Find Route) ──
+          if (_showRoutePanel && !_routePanelMinimized)
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: SlideTransition(
+                position: _routePanelSlideAnimation,
+                child: _buildRoutePanel(mapProvider),
+              ),
+            ),
+
+          // ── Minimized Route Panel ──
+          if (_showRoutePanel && _routePanelMinimized)
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: SlideTransition(
+                position: _minimizedPanelSlideAnimation,
+                child: GestureDetector(
+                  onTap: _expandRoutePanel,
+                  child: _buildMinimizedRoutePanel(),
+                ),
+              ),
+            ),
 
           // ── Loading indicator ──
           if (mapProvider.isLoading)
@@ -502,6 +708,921 @@ class _MapHomeScreenState extends State<MapHomeScreen> {
                 ),
               ),
             ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNavigationPanel(MapProvider mapProvider) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: Color(0xFF212121),
+        borderRadius: BorderRadius.only(
+          topLeft: Radius.circular(16),
+          topRight: Radius.circular(16),
+        ),
+        border: Border(
+          top: BorderSide(color: Color(0xFF4B4B4B), width: 1),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // ── Drag handle ──
+          Padding(
+            padding: const EdgeInsets.only(top: 10),
+            child: Container(
+              width: 40,
+              height: 3,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.4),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+
+          // ── Inner card ──
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+            child: Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFF292929),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // ── Header: "Navigation" + close button ──
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Navigation',
+                        style: GoogleFonts.poppins(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                          color: Colors.white,
+                        ),
+                      ),
+                      GestureDetector(
+                        onTap: _closeNavPanel,
+                        child: Container(
+                          width: 20,
+                          height: 20,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.white.withValues(alpha: 0.15),
+                          ),
+                          child: Transform.rotate(
+                            angle: 0.785398, // 45 degrees
+                            child: const Icon(
+                              Icons.add,
+                              size: 14,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 14),
+
+                  // ── Location + Destination fields with connector ──
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Left column: icons + dotted line
+                      SizedBox(
+                        width: 24,
+                        child: Column(
+                          children: [
+                            // "Me" marker — centered in 38px to match field height
+                            SizedBox(
+                              height: 38,
+                              child: Center(child: _buildMeMarker()),
+                            ),
+                            // Dotted connector — matches 12px gap between fields
+                            SizedBox(
+                              height: 12,
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: List.generate(
+                                  3,
+                                  (_) => Container(
+                                    width: 2,
+                                    height: 2,
+                                    margin: const EdgeInsets.symmetric(
+                                        vertical: 0.8),
+                                    decoration: BoxDecoration(
+                                      color:
+                                          Colors.white.withValues(alpha: 0.4),
+                                      borderRadius: BorderRadius.circular(1),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            // Red pin — centered in 38px to match field height
+                            SizedBox(
+                              height: 38,
+                              child: Center(
+                                child: const Icon(
+                                  Icons.location_on,
+                                  color: Color(0xFFFF4444),
+                                  size: 24,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      const SizedBox(width: 12),
+
+                      // Right column: text fields
+                      Expanded(
+                        child: Column(
+                          children: [
+                            // Your Location
+                            Container(
+                              height: 38,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF444444),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: TextField(
+                                controller: _locationController,
+                                readOnly: true,
+                                onTap: () => _openLocationSearch(
+                                  label: 'Your Location',
+                                  controller: _locationController,
+                                  onSelected: (place) {
+                                    final mp = Provider.of<MapProvider>(context, listen: false);
+                                    mp.setStartLocation(place);
+                                  },
+                                ),
+                                style: GoogleFonts.poppins(
+                                  fontSize: 13,
+                                  color: Colors.white,
+                                ),
+                                textAlignVertical: TextAlignVertical.center,
+                                decoration: InputDecoration(
+                                  hintText: 'Your Location',
+                                  hintStyle: GoogleFonts.poppins(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w400,
+                                    color: Colors.white,
+                                  ),
+                                  border: InputBorder.none,
+                                  isCollapsed: true,
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 11,
+                                  ),
+                                ),
+                              ),
+                            ),
+
+                            const SizedBox(height: 12),
+
+                            // Your Destination
+                            Container(
+                              height: 38,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF444444),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: TextField(
+                                controller: _destinationController,
+                                readOnly: true,
+                                onTap: () => _openLocationSearch(
+                                  label: 'Your Destination',
+                                  controller: _destinationController,
+                                  onSelected: (place) {
+                                    final mp = Provider.of<MapProvider>(context, listen: false);
+                                    mp.setDestination(place);
+                                  },
+                                ),
+                                style: GoogleFonts.poppins(
+                                  fontSize: 13,
+                                  color: Colors.white,
+                                ),
+                                textAlignVertical: TextAlignVertical.center,
+                                decoration: InputDecoration(
+                                  hintText: 'Your Destination',
+                                  hintStyle: GoogleFonts.poppins(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w400,
+                                    color: Colors.white,
+                                  ),
+                                  border: InputBorder.none,
+                                  isCollapsed: true,
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 11,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+
+
+                ],
+              ),
+            ),
+          ),
+
+          // ── Find Route button ──
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 16),
+            child: Builder(
+              builder: (context) {
+                final isEnabled = _locationController.text.trim().isNotEmpty &&
+                    _destinationController.text.trim().isNotEmpty;
+                return GestureDetector(
+                  onTap: isEnabled ? _onFindRoute : null,
+                  child: Opacity(
+                    opacity: isEnabled ? 1.0 : 0.35,
+                    child: Container(
+                      width: double.infinity,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFB1FF8E),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Center(
+                        child: Text(
+                          'Find Route',
+                          style: GoogleFonts.poppins(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.black,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Route Panel (shown after pressing Find Route) ──
+  Widget _buildRoutePanel(MapProvider mapProvider) {
+    return AnimatedBuilder(
+      animation: _shadowAnimation,
+      builder: (context, child) {
+        return Stack(
+          clipBehavior: Clip.none,
+          children: [
+            // Main panel container
+            Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFF212121),
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(16),
+                  topRight: Radius.circular(16),
+                ),
+                border: const Border(
+                  top: BorderSide(color: Color(0xFF4B4B4B), width: 1),
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFFB1FF8E)
+                        .withValues(alpha: 0.5 * _shadowAnimation.value),
+                    blurRadius: 134.5 * _shadowAnimation.value,
+                    spreadRadius: 5 * _shadowAnimation.value,
+                    offset: Offset(0, 33 * _shadowAnimation.value),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(height: 14), // space for overlapping icon
+
+                  // ── Inner card ──
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF292929),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Padding(
+                            padding: const EdgeInsets.fromLTRB(8, 12, 8, 10),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                // ── Your Location (fixed top) ──
+                                _buildFieldRow(
+                                  icon: _buildMeMarker(),
+                                  child: Container(
+                                    height: 38,
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF444444),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: TextField(
+                                      controller: _locationController,
+                                      readOnly: true,
+                                      onTap: () => _openLocationSearch(
+                                        label: 'Your Location',
+                                        controller: _locationController,
+                                        onSelected: (place) {
+                                          final mp = Provider.of<MapProvider>(context, listen: false);
+                                          mp.setStartLocation(place);
+                                        },
+                                      ),
+                                      style: GoogleFonts.poppins(
+                                        fontSize: 13,
+                                        color: Colors.white,
+                                      ),
+                                      textAlignVertical: TextAlignVertical.center,
+                                      decoration: InputDecoration(
+                                        hintText: 'Your Location',
+                                        hintStyle: GoogleFonts.poppins(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w400,
+                                          color: Colors.white,
+                                        ),
+                                        border: InputBorder.none,
+                                        isCollapsed: true,
+                                        contentPadding:
+                                            const EdgeInsets.symmetric(
+                                          horizontal: 16,
+                                          vertical: 11,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+
+                                // ── Stops list (reorderable) ──
+                                if (_stopControllers.isNotEmpty)
+                                  ReorderableListView.builder(
+                                    shrinkWrap: true,
+                                    physics: const NeverScrollableScrollPhysics(),
+                                    buildDefaultDragHandles: false,
+                                    proxyDecorator: (child, index, animation) {
+                                      return Material(
+                                        color: Colors.transparent,
+                                        elevation: 0,
+                                        child: child,
+                                      );
+                                    },
+                                    onReorder: _reorderStop,
+                                    itemCount: _stopControllers.length,
+                                    itemBuilder: (context, index) {
+                                      return Column(
+                                        key: ValueKey('stop_$index'),
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          _buildDottedConnector(),
+                                          _buildFieldRow(
+                                            icon: ReorderableDragStartListener(
+                                              index: index,
+                                              child: _buildStopMarker(),
+                                            ),
+                                            child: Container(
+                                              height: 38,
+                                              decoration: BoxDecoration(
+                                                color: const Color(0xFF444444),
+                                                borderRadius: BorderRadius.circular(12),
+                                              ),
+                                              child: Row(
+                                                children: [
+                                                  Expanded(
+                                                    child: TextField(
+                                                      controller: _stopControllers[index],
+                                                      readOnly: true,
+                                                      onTap: () => _openLocationSearch(
+                                                        label: 'Stop ${index + 1}',
+                                                        controller: _stopControllers[index],
+                                                        onSelected: (place) {
+                                                          final mp = Provider.of<MapProvider>(context, listen: false);
+                                                          if (index < mp.stops.length) {
+                                                            mp.removeStop(index);
+                                                          }
+                                                          mp.addStop(place);
+                                                        },
+                                                      ),
+                                                      style: GoogleFonts.poppins(
+                                                        fontSize: 13,
+                                                        color: Colors.white,
+                                                      ),
+                                                      textAlignVertical: TextAlignVertical.center,
+                                                      decoration: InputDecoration(
+                                                        hintText: 'Stop ${index + 1}',
+                                                        hintStyle: GoogleFonts.poppins(
+                                                          fontSize: 13,
+                                                          fontWeight: FontWeight.w400,
+                                                          color: Colors.white.withValues(alpha: 0.6),
+                                                        ),
+                                                        border: InputBorder.none,
+                                                        isCollapsed: true,
+                                                        contentPadding: const EdgeInsets.symmetric(
+                                                          horizontal: 16,
+                                                          vertical: 11,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  GestureDetector(
+                                                    onTap: () => _removeStop(index),
+                                                    child: Padding(
+                                                      padding: const EdgeInsets.only(right: 12),
+                                                      child: Icon(
+                                                        Icons.close,
+                                                        size: 18,
+                                                        color: Colors.white.withValues(alpha: 0.5),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      );
+                                    },
+                                  ),
+
+                                // ── Dotted connector to destination ──
+                                _buildDottedConnector(),
+
+                                // ── Your Destination (sticky bottom) ──
+                                _buildFieldRow(
+                                  icon: const Icon(
+                                    Icons.location_on,
+                                    color: Color(0xFFFF4444),
+                                    size: 24,
+                                  ),
+                                  child: Container(
+                                    height: 38,
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF444444),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: TextField(
+                                      controller: _destinationController,
+                                      readOnly: true,
+                                      onTap: () => _openLocationSearch(
+                                        label: 'Your Destination',
+                                        controller: _destinationController,
+                                        onSelected: (place) {
+                                          final mp = Provider.of<MapProvider>(context, listen: false);
+                                          mp.setDestination(place);
+                                        },
+                                      ),
+                                      style: GoogleFonts.poppins(
+                                        fontSize: 13,
+                                        color: Colors.white,
+                                      ),
+                                      textAlignVertical: TextAlignVertical.center,
+                                      decoration: InputDecoration(
+                                        hintText: 'Your Destination',
+                                        hintStyle: GoogleFonts.poppins(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w400,
+                                          color: Colors.white,
+                                        ),
+                                        border: InputBorder.none,
+                                        isCollapsed: true,
+                                        contentPadding:
+                                            const EdgeInsets.symmetric(
+                                          horizontal: 16,
+                                          vertical: 11,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                    ),
+                  ),
+
+                  // ── Optimise Route + Add Stop buttons ──
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 16),
+                    child: Row(
+                      children: [
+                        // Optimise Route (left)
+                        Expanded(
+                          child: GestureDetector(
+                            onTap: () {
+                              final mp = Provider.of<MapProvider>(context, listen: false);
+                              mp.findOptimizedRoute();
+                            },
+                            child: Container(
+                              height: 48,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFB1FF8E),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Center(
+                                child: Text(
+                                  'Optimise Route',
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w500,
+                                    color: Colors.black,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        // Add Stop (right) — disabled at 3 stops
+                        Expanded(
+                          child: Builder(
+                            builder: (context) {
+                              final canAdd = _stopControllers.length < 3;
+                              return GestureDetector(
+                                onTap: canAdd ? _addStop : null,
+                                child: Opacity(
+                                  opacity: canAdd ? 1.0 : 0.35,
+                                  child: Container(
+                                    height: 48,
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFB1FF8E),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Center(
+                                      child: Text(
+                                        'Add Stop +',
+                                        style: GoogleFonts.poppins(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w500,
+                                          color: Colors.black,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // ── Overlapping route icon at top (center) ──
+            Positioned(
+              top: -18,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: GestureDetector(
+                  onTap: _closeRoutePanel,
+                  child: Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: const Color(0xFFB1FF8E),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFFB1FF8E)
+                              .withValues(alpha: 0.35),
+                          blurRadius: 12,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Center(
+                      child: Transform.rotate(
+                        angle: 0.785398,
+                        child: Container(
+                          width: 20,
+                          height: 20,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(3),
+                            border: Border.all(
+                              color: const Color(0xFF171717),
+                              width: 2,
+                            ),
+                          ),
+                          child: Center(
+                            child: Transform.rotate(
+                              angle: -0.785398,
+                              child: const Icon(
+                                Icons.turn_right,
+                                color: Color(0xFF171717),
+                                size: 11,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
+            // ── Floating reset (×) button at top-left ──
+            Positioned(
+              top: -18,
+              left: 16,
+              child: GestureDetector(
+                onTap: _resetNavigation,
+                child: Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: const Color(0xFF333333),
+                    border: Border.all(
+                      color: const Color(0xFF4B4B4B),
+                      width: 1,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.4),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: const Center(
+                    child: Icon(
+                      Icons.close,
+                      color: Colors.white,
+                      size: 18,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // ── Minimized route panel (Next Stop) ──
+  Widget _buildMinimizedRoutePanel() {
+    return AnimatedBuilder(
+      animation: _shadowAnimation,
+      builder: (context, child) {
+        return Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFF212121),
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(16),
+                  topRight: Radius.circular(16),
+                ),
+                border: const Border(
+                  top: BorderSide(color: Color(0xFF4B4B4B), width: 1),
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFFB1FF8E)
+                        .withValues(alpha: 0.5 * _shadowAnimation.value),
+                    blurRadius: 134.5 * _shadowAnimation.value,
+                    spreadRadius: 5 * _shadowAnimation.value,
+                    offset: Offset(0, 33 * _shadowAnimation.value),
+                  ),
+                ],
+              ),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 34, 14, 16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // "Next Stop" label
+                    Text(
+                      'Next Stop',
+                      style: GoogleFonts.poppins(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    // Display next upcoming stop (read-only)
+                    Builder(
+                      builder: (context) {
+                        final mp = Provider.of<MapProvider>(context);
+                        final nextStopText = mp.stops.isNotEmpty
+                            ? mp.stops.first.fullAddress
+                            : mp.destination != null
+                                ? mp.destination!.fullAddress
+                                : 'No stops added';
+                        return Container(
+                          width: double.infinity,
+                          height: 46,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF444444),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                          ),
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            nextStopText,
+                            style: GoogleFonts.poppins(
+                              fontSize: 13,
+                              color: mp.stops.isNotEmpty || mp.destination != null
+                                  ? Colors.white
+                                  : Colors.white.withValues(alpha: 0.5),
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            // ── Overlapping route icon ──
+            Positioned(
+              top: -18,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: const Color(0xFFB1FF8E),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFFB1FF8E)
+                            .withValues(alpha: 0.35),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Center(
+                    child: Transform.rotate(
+                      angle: 0.785398,
+                      child: Container(
+                        width: 20,
+                        height: 20,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(3),
+                          border: Border.all(
+                            color: const Color(0xFF171717),
+                            width: 2,
+                          ),
+                        ),
+                        child: Center(
+                          child: Transform.rotate(
+                            angle: -0.785398,
+                            child: const Icon(
+                              Icons.turn_right,
+                              color: Color(0xFF171717),
+                              size: 11,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
+            // ── Floating reset (×) button at top-left ──
+            Positioned(
+              top: -18,
+              left: 16,
+              child: GestureDetector(
+                onTap: _resetNavigation,
+                child: Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: const Color(0xFF333333),
+                    border: Border.all(
+                      color: const Color(0xFF4B4B4B),
+                      width: 1,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.4),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: const Center(
+                    child: Icon(
+                      Icons.close,
+                      color: Colors.white,
+                      size: 18,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// A single row: [30px icon] [18px gap] [expanded field]
+  Widget _buildFieldRow({required Widget icon, required Widget child}) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        SizedBox(width: 24, height: 24, child: Center(child: icon)),
+        const SizedBox(width: 10),
+        Expanded(child: child),
+      ],
+    );
+  }
+
+  /// Dotted vertical connector between fields
+  Widget _buildDottedConnector() {
+    return Padding(
+      padding: const EdgeInsets.only(left: 11), // center under the 24px icon
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 2),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: List.generate(
+              3,
+              (_) => Container(
+                width: 2,
+                height: 3,
+                margin: const EdgeInsets.symmetric(vertical: 1.5),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.4),
+                  borderRadius: BorderRadius.circular(1),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Grey stop marker (muted version of the "me" marker)
+  Widget _buildStopMarker() {
+    return SizedBox(
+      width: 24,
+      height: 24,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Container(
+            width: 22,
+            height: 22,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.white.withValues(alpha: 0.08),
+            ),
+          ),
+          Container(
+            width: 14,
+            height: 14,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.white.withValues(alpha: 0.25),
+            ),
+          ),
+          Container(
+            width: 9,
+            height: 9,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              color: Color(0xFF171717),
+            ),
+          ),
         ],
       ),
     );

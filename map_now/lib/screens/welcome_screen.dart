@@ -18,6 +18,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   late Animation<double> _fadeOutAnimation;
 
   bool _showLoginPanel = false;
+  final TextEditingController _nameController = TextEditingController();
   final TextEditingController _phoneController = TextEditingController();
 
   @override
@@ -48,6 +49,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   @override
   void dispose() {
     _animationController.dispose();
+    _nameController.dispose();
     _phoneController.dispose();
     super.dispose();
   }
@@ -60,7 +62,20 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   }
 
   Future<void> _handleLogin() async {
+    final name = _nameController.text.trim();
     final phone = _phoneController.text.trim();
+    if (name.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Please enter your name',
+            style: GoogleFonts.poppins(),
+          ),
+          backgroundColor: Colors.red[400],
+        ),
+      );
+      return;
+    }
     if (phone.isEmpty || phone.length < 10) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -80,7 +95,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     if (!mounted) return;
 
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final success = await authProvider.login('User', phone);
+    final success = await authProvider.login(name, phone);
 
     if (success && mounted) {
       Navigator.of(context).pushReplacementNamed('/home');
@@ -255,6 +270,39 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                         ),
 
                         const SizedBox(height: 24),
+
+                        // Name Input
+                        Container(
+                          height: 46,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF444444),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: TextField(
+                            controller: _nameController,
+                            textCapitalization: TextCapitalization.words,
+                            style: GoogleFonts.poppins(
+                              fontSize: 16,
+                              color: Colors.white,
+                            ),
+                            textAlignVertical: TextAlignVertical.center,
+                            decoration: InputDecoration(
+                              hintText: 'Name',
+                              hintStyle: GoogleFonts.poppins(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w400,
+                                color: Colors.white.withValues(alpha: 0.6),
+                              ),
+                              border: InputBorder.none,
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 24,
+                                vertical: 12,
+                              ),
+                            ),
+                          ),
+                        ),
+
+                        const SizedBox(height: 16),
 
                         // Phone Number Input
                         Container(

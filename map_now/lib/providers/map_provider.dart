@@ -133,6 +133,13 @@ class MapProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  void reorderStops(int oldIndex, int newIndex) {
+    if (newIndex > oldIndex) newIndex--;
+    final item = _stops.removeAt(oldIndex);
+    _stops.insert(newIndex, item);
+    notifyListeners();
+  }
+
   void clearRoute() {
     _optimizedRoute = null;
     notifyListeners();
