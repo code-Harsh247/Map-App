@@ -38,6 +38,7 @@ class _MapHomeScreenState extends State<MapHomeScreen>
   late Animation<Offset> _minimizedPanelSlideAnimation;
   final List<TextEditingController> _stopControllers = [];
   MapProvider? _mapProvider;
+  String? _lastSeenError;
 
   @override
   void initState() {
@@ -126,23 +127,18 @@ class _MapHomeScreenState extends State<MapHomeScreen>
   void _onRouteChanged() {
     final mp = Provider.of<MapProvider>(context, listen: false);
 
-    // Show errors gracefully without blocking UI
+    // Show errors via Modal as requested
     if (mp.errorMessage != null && mp.errorMessage!.isNotEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).hideCurrentSnackBar();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              mp.errorMessage!,
-              style: GoogleFonts.poppins(color: Colors.white),
-            ),
-            backgroundColor: Colors.red[700],
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            margin: const EdgeInsets.only(bottom: 20, left: 16, right: 16),
-          ),
-        );
+      if (mp.errorMessage != _lastSeenError &&
+          !mp.errorMessage!.contains('Location services are disabled')) {
+        _lastSeenError = mp.errorMessage;
+        // Schedule dialog to avoid frame build issues
+        Future.microtask(() {
+          if (mounted) _showErrorDialog(mp.errorMessage!);
+        });
       }
+    } else {
+      _lastSeenError = null;
     }
 
     // If we have an optimized route, fit camera to it
@@ -177,6 +173,36 @@ class _MapHomeScreenState extends State<MapHomeScreen>
         mp.errorMessage!.contains('Location services are disabled')) {
       _showLocationDialog();
     }
+  }
+
+  void _showErrorDialog(String message) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF292929),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          'Message',
+          style: GoogleFonts.poppins(
+            color: Colors.white,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        content: Text(
+          message,
+          style: GoogleFonts.poppins(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text(
+              'Close',
+              style: GoogleFonts.poppins(color: const Color(0xFFB1FF8E)),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showLocationDialog() {
@@ -868,33 +894,6 @@ class _MapHomeScreenState extends State<MapHomeScreen>
               ),
             ),
 
-          // ── Error snackbar area ──
-          if (mapProvider.errorMessage != null)
-            Positioned(
-              bottom: 160,
-              left: 16,
-              right: 90,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF292929),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: Colors.red.withValues(alpha: 0.5),
-                    width: 1,
-                  ),
-                ),
-                child: Text(
-                  mapProvider.errorMessage!,
-                  style: GoogleFonts.poppins(
-                    color: Colors.red[300],
-                    fontSize: 13,
-                  ),
-                ),
-              ),
-            ),
-
           // ── Distance badge (shown when route found, upper right) ──
           if (mapProvider.optimizedRoute != null)
             Positioned(
@@ -1312,10 +1311,7 @@ class _MapHomeScreenState extends State<MapHomeScreen>
                                         children: [
                                           _buildDottedConnector(),
                                           _buildFieldRow(
-                                            icon: ReorderableDragStartListener(
-                                              index: index,
-                                              child: _buildStopMarker(),
-                                            ),
+                                            icon: _buildStopMarker(),
                                             child: Container(
                                               height: 38,
                                               decoration: BoxDecoration(
@@ -1360,10 +1356,27 @@ class _MapHomeScreenState extends State<MapHomeScreen>
                                                       ),
                                                     ),
                                                   ),
+                                                  // Drag Handle
+                                                  ReorderableDragStartListener(
+                                                    index: index,
+                                                    child: Padding(
+                                                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                                                      child: Icon(
+                                                        Icons.drag_handle_rounded,
+                                                        color: Colors.white.withValues(alpha: 0.4),
+                                                        size: 20,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  Container(
+                                                    width: 1,
+                                                    height: 16,
+                                                    color: Colors.white.withValues(alpha: 0.1),
+                                                  ),
                                                   GestureDetector(
                                                     onTap: () => _removeStop(index),
                                                     child: Padding(
-                                                      padding: const EdgeInsets.only(right: 12),
+                                                      padding: const EdgeInsets.fromLTRB(8, 0, 12, 0),
                                                       child: Icon(
                                                         Icons.close,
                                                         size: 18,
