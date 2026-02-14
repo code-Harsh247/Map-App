@@ -7,9 +7,11 @@ import '../providers/map_provider.dart';
 import '../providers/auth_provider.dart';
 import '../models/place_model.dart';
 import 'location_search_screen.dart';
+import 'widgets/pulsing_marker.dart';
+import 'package:geolocator/geolocator.dart';
 
 class MapHomeScreen extends StatefulWidget {
-  const MapHomeScreen({Key? key}) : super(key: key);
+  const MapHomeScreen({super.key});
 
   @override
   State<MapHomeScreen> createState() => _MapHomeScreenState();
@@ -35,6 +37,7 @@ class _MapHomeScreenState extends State<MapHomeScreen>
   late AnimationController _minimizedPanelAnimController;
   late Animation<Offset> _minimizedPanelSlideAnimation;
   final List<TextEditingController> _stopControllers = [];
+  MapProvider? _mapProvider;
 
   @override
   void initState() {
@@ -92,6 +95,10 @@ class _MapHomeScreenState extends State<MapHomeScreen>
       mapProvider.setMapController(_mapController);
       mapProvider.getUserLocation();
     });
+    
+    // Auto-zoom to route when calculated
+    _mapProvider = Provider.of<MapProvider>(context, listen: false);
+    _mapProvider!.addListener(_onRouteChanged);
 
     _locationController.addListener(_onFieldChanged);
     _destinationController.addListener(_onFieldChanged);
@@ -99,6 +106,8 @@ class _MapHomeScreenState extends State<MapHomeScreen>
 
   @override
   void dispose() {
+    _mapProvider?.removeListener(_onRouteChanged);
+
     _locationController.removeListener(_onFieldChanged);
     _destinationController.removeListener(_onFieldChanged);
     _locationController.dispose();
@@ -112,6 +121,65 @@ class _MapHomeScreenState extends State<MapHomeScreen>
     }
     _mapController.dispose();
     super.dispose();
+  }
+
+  void _onRouteChanged() {
+    final mp = Provider.of<MapProvider>(context, listen: false);
+    // If we have an optimized route, fit camera to it
+    if (mp.optimizedRoute != null && mp.optimizedRoute!.path.isNotEmpty) {
+      // Calculate bounds
+      double? minLat, maxLat, minLng, maxLng;
+      for (var point in mp.optimizedRoute!.path) {
+        if (minLat == null || point[0] < minLat) minLat = point[0];
+        if (maxLat == null || point[0] > maxLat) maxLat = point[0];
+        if (minLng == null || point[1] < minLng) minLng = point[1];
+        if (maxLng == null || point[1] > maxLng) maxLng = point[1];
+      }
+
+      if (minLat != null && maxLat != null && minLng != null && maxLng != null) {
+        // Add padding
+        final bounds = LatLngBounds(
+          LatLng(minLat, minLng),
+          LatLng(maxLat, maxLng),
+        );
+        _mapController.fitCamera(
+          CameraFit.bounds(
+            bounds: bounds,
+            padding: const EdgeInsets.only(
+                top: 100, bottom: 200, left: 50, right: 50),
+          ),
+        );
+      }
+    }
+    
+    // Check for Location Permission Error to show dialog
+    if (mp.errorMessage != null && 
+        mp.errorMessage!.contains('Location services are disabled')) {
+      _showLocationDialog();
+    }
+  }
+
+  void _showLocationDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Location Disabled'),
+        content: const Text('Please enable location services to use this feature.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              Geolocator.openLocationSettings();
+            },
+            child: const Text('Settings'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _onFieldChanged() {
@@ -152,6 +220,19 @@ class _MapHomeScreenState extends State<MapHomeScreen>
   }
 
   void _onFindRoute() {
+    // If no start location selected, default to current GPS location
+    final mp = Provider.of<MapProvider>(context, listen: false);
+    if (_locationController.text.trim().isEmpty && mp.userLocation != null) {
+      final currentLoc = PlaceModel(
+        fullAddress: 'Current Location',
+        latitude: mp.userLocation!.latitude,
+        longitude: mp.userLocation!.longitude,
+        placeId: 'current_location',
+      );
+      mp.setStartLocation(currentLoc);
+      _locationController.text = 'Current Location';
+    }
+
     // Close nav panel, then open route panel with animated shadow
     _panelAnimController.reverse().then((_) {
       if (!mounted) return;
@@ -164,6 +245,10 @@ class _MapHomeScreenState extends State<MapHomeScreen>
       Future.delayed(const Duration(milliseconds: 150), () {
         if (mounted) _shadowAnimController.forward();
       });
+
+      // Call routing API for direct start → destination path
+      final mapProv = Provider.of<MapProvider>(context, listen: false);
+      mapProv.findDirectRoute();
     });
   }
 
@@ -239,6 +324,10 @@ class _MapHomeScreenState extends State<MapHomeScreen>
       setState(() {
         _stopControllers.add(TextEditingController(text: result.fullAddress));
       });
+      // Re-calculate route (chained) whenever a stop is added
+      if (mp.startLocation != null && mp.destination != null) {
+         mp.calculateChainedRoute();
+      }
     }
   }
 
@@ -250,6 +339,10 @@ class _MapHomeScreenState extends State<MapHomeScreen>
         _stopControllers[index].dispose();
         _stopControllers.removeAt(index);
       });
+      // Re-calculate route (chained) whenever a stop is removed
+       if (mp.startLocation != null && mp.destination != null) {
+         mp.calculateChainedRoute();
+      }
     }
   }
 
@@ -261,13 +354,17 @@ class _MapHomeScreenState extends State<MapHomeScreen>
       final controller = _stopControllers.removeAt(oldIndex);
       _stopControllers.insert(newIndex, controller);
     });
+     // Re-calculate route (chained) whenever stops are reordered
+     if (mp.startLocation != null && mp.destination != null) {
+         mp.calculateChainedRoute();
+      }
   }
 
   List<Polyline> _buildPolylines(MapProvider mapProvider) {
     if (mapProvider.optimizedRoute == null) return [];
 
     List<LatLng> polylineCoordinates = mapProvider.optimizedRoute!.path
-        .map((coord) => LatLng(coord['latitude']!, coord['longitude']!))
+        .map((coord) => LatLng(coord[0], coord[1]))
         .toList();
 
     return [
@@ -302,12 +399,11 @@ class _MapHomeScreenState extends State<MapHomeScreen>
             mapProvider.startLocation!.latitude,
             mapProvider.startLocation!.longitude,
           ),
-          width: 40,
-          height: 40,
-          child: const Icon(
-            Icons.location_on,
-            color: Color(0xFFB1FF8E),
-            size: 40,
+          width: 32,
+          height: 32,
+          child: _buildCircleMarker(
+            color: const Color(0xFFB1FF8E),
+            innerColor: const Color(0xFF171717),
           ),
         ),
       );
@@ -321,28 +417,12 @@ class _MapHomeScreenState extends State<MapHomeScreen>
             mapProvider.stops[i].latitude,
             mapProvider.stops[i].longitude,
           ),
-          width: 40,
-          height: 40,
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              const Icon(
-                Icons.location_on,
-                color: Colors.blue,
-                size: 40,
-              ),
-              Positioned(
-                top: 8,
-                child: Text(
-                  '${i + 1}',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-            ],
+          width: 32,
+          height: 32,
+          child: _buildCircleMarker(
+            color: const Color(0xFF64B5F6),
+            innerColor: const Color(0xFF171717),
+            label: '${i + 1}',
           ),
         ),
       );
@@ -356,12 +436,11 @@ class _MapHomeScreenState extends State<MapHomeScreen>
             mapProvider.destination!.latitude,
             mapProvider.destination!.longitude,
           ),
-          width: 40,
-          height: 40,
-          child: const Icon(
-            Icons.location_on,
-            color: Colors.red,
-            size: 40,
+          width: 32,
+          height: 32,
+          child: _buildCircleMarker(
+            color: const Color(0xFFFF4444),
+            innerColor: const Color(0xFF171717),
           ),
         ),
       );
@@ -378,7 +457,6 @@ class _MapHomeScreenState extends State<MapHomeScreen>
       child: Stack(
         alignment: Alignment.center,
         children: [
-          // Outer glow circle
           Container(
             width: 24,
             height: 24,
@@ -387,7 +465,6 @@ class _MapHomeScreenState extends State<MapHomeScreen>
               color: const Color(0xFFB1FF8E).withValues(alpha: 0.17),
             ),
           ),
-          // Middle solid green circle
           Container(
             width: 16,
             height: 16,
@@ -396,7 +473,99 @@ class _MapHomeScreenState extends State<MapHomeScreen>
               color: Color(0xFFB1FF8E),
             ),
           ),
+          Container(
+            width: 10,
+            height: 10,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              color: Color(0xFF171717),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Map marker — concentric circles with optional number label
+  Widget _buildCircleMarker({
+    required Color color,
+    required Color innerColor,
+    String? label,
+  }) {
+    return SizedBox(
+      width: 32,
+      height: 32,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          // Outer glow
+          Container(
+            width: 32,
+            height: 32,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: color.withValues(alpha: 0.18),
+            ),
+          ),
+          // Middle solid ring
+          Container(
+            width: 22,
+            height: 22,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: color,
+            ),
+          ),
           // Inner dark circle
+          Container(
+            width: 14,
+            height: 14,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: innerColor,
+            ),
+            child: label != null
+                ? Center(
+                    child: Text(
+                      label,
+                      style: TextStyle(
+                        color: color,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 9,
+                      ),
+                    ),
+                  )
+                : null,
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Destination icon for nav panel — small red concentric circles
+  Widget _buildDestinationIcon() {
+    return SizedBox(
+      width: 24,
+      height: 24,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Container(
+            width: 24,
+            height: 24,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: const Color(0xFFFF4444).withValues(alpha: 0.17),
+            ),
+          ),
+          Container(
+            width: 16,
+            height: 16,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              color: Color(0xFFFF4444),
+            ),
+          ),
           Container(
             width: 10,
             height: 10,
@@ -432,12 +601,22 @@ class _MapHomeScreenState extends State<MapHomeScreen>
             children: [
               TileLayer(
                 urlTemplate:
-                    'https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+                    'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
                 userAgentPackageName: 'com.mapnow.map_now',
                 maxZoom: 19,
               ),
               PolylineLayer(polylines: _buildPolylines(mapProvider)),
-              MarkerLayer(markers: _buildMarkers(mapProvider)),
+              MarkerLayer(markers: [
+                ..._buildMarkers(mapProvider),
+                // Add pulsing marker for user location if available
+                if (mapProvider.userLocation != null)
+                   Marker(
+                    point: mapProvider.userLocation!,
+                    width: 80,
+                    height: 80,
+                    child: const PulsingLocationMarker(color: Color(0xFF4285F4)), // Google Blue
+                  ),
+              ]),
             ],
           ),
 
@@ -501,9 +680,9 @@ class _MapHomeScreenState extends State<MapHomeScreen>
             bottom: 170,
             child: GestureDetector(
               onTap: () {
-                // Re-center on user location
+                // Re-center on user location with animation
                 if (mapProvider.userLocation != null) {
-                  _mapController.move(mapProvider.userLocation!, 15);
+                  _animatedMapMove(mapProvider.userLocation!, 15);
                   _mapController.rotate(0);
                 } else {
                   _mapController.rotate(0);
@@ -599,13 +778,13 @@ class _MapHomeScreenState extends State<MapHomeScreen>
               ),
             ),
 
-          // ── Tap-outside barrier to minimize route panel ──
+          // ── Tap-outside to minimize route panel (passes touches to map) ──
           if (_showRoutePanel && !_routePanelMinimized)
             Positioned.fill(
               child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
+                behavior: HitTestBehavior.translucent,
                 onTap: _minimizeRoutePanel,
-                child: const SizedBox.expand(),
+                child: const SizedBox.shrink(),
               ),
             ),
 
@@ -671,11 +850,11 @@ class _MapHomeScreenState extends State<MapHomeScreen>
               ),
             ),
 
-          // ── Distance badge (shown when route found) ──
+          // ── Distance badge (shown when route found, upper right) ──
           if (mapProvider.optimizedRoute != null)
             Positioned(
-              bottom: 165,
-              left: 16,
+              top: MediaQuery.of(context).padding.top + 16,
+              right: 16,
               child: Container(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -824,15 +1003,11 @@ class _MapHomeScreenState extends State<MapHomeScreen>
                                 ),
                               ),
                             ),
-                            // Red pin — centered in 38px to match field height
+                            // Red circle — centered in 38px to match field height
                             SizedBox(
                               height: 38,
                               child: Center(
-                                child: const Icon(
-                                  Icons.location_on,
-                                  color: Color(0xFFFF4444),
-                                  size: 24,
-                                ),
+                                child: _buildDestinationIcon(),
                               ),
                             ),
                           ],
@@ -943,7 +1118,9 @@ class _MapHomeScreenState extends State<MapHomeScreen>
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 16),
             child: Builder(
               builder: (context) {
-                final isEnabled = _locationController.text.trim().isNotEmpty &&
+                final mp = Provider.of<MapProvider>(context);
+                final hasStart = _locationController.text.trim().isNotEmpty || mp.userLocation != null;
+                final isEnabled = hasStart &&
                     _destinationController.text.trim().isNotEmpty;
                 return GestureDetector(
                   onTap: isEnabled ? _onFindRoute : null,
@@ -1163,11 +1340,7 @@ class _MapHomeScreenState extends State<MapHomeScreen>
 
                                 // ── Your Destination (sticky bottom) ──
                                 _buildFieldRow(
-                                  icon: const Icon(
-                                    Icons.location_on,
-                                    color: Color(0xFFFF4444),
-                                    size: 24,
-                                  ),
+                                  icon: _buildDestinationIcon(),
                                   child: Container(
                                     height: 38,
                                     decoration: BoxDecoration(
@@ -1219,30 +1392,41 @@ class _MapHomeScreenState extends State<MapHomeScreen>
                     padding: const EdgeInsets.fromLTRB(12, 10, 12, 16),
                     child: Row(
                       children: [
-                        // Optimise Route (left)
+                        // Optimise Route (left) — enabled only when stops need optimization
                         Expanded(
-                          child: GestureDetector(
-                            onTap: () {
-                              final mp = Provider.of<MapProvider>(context, listen: false);
-                              mp.findOptimizedRoute();
-                            },
-                            child: Container(
-                              height: 48,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFB1FF8E),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Center(
-                                child: Text(
-                                  'Optimise Route',
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w500,
-                                    color: Colors.black,
+                          child: Builder(
+                            builder: (context) {
+                              final mp = Provider.of<MapProvider>(context);
+                              final canOptimize = mp.stopsNeedOptimization;
+                              return GestureDetector(
+                                onTap: canOptimize
+                                    ? () {
+                                        final mp = Provider.of<MapProvider>(context, listen: false);
+                                        mp.optimizeRoute();
+                                      }
+                                    : null,
+                                child: Opacity(
+                                  opacity: canOptimize ? 1.0 : 0.35,
+                                  child: Container(
+                                    height: 48,
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFB1FF8E),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Center(
+                                      child: Text(
+                                        'Optimise Route',
+                                        style: GoogleFonts.poppins(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w500,
+                                          color: Colors.black,
+                                        ),
+                                      ),
+                                    ),
                                   ),
                                 ),
-                              ),
-                            ),
+                              );
+                            },
                           ),
                         ),
                         const SizedBox(width: 10),
@@ -1300,8 +1484,7 @@ class _MapHomeScreenState extends State<MapHomeScreen>
                       color: const Color(0xFFB1FF8E),
                       boxShadow: [
                         BoxShadow(
-                          color: const Color(0xFFB1FF8E)
-                              .withValues(alpha: 0.35),
+                          color: const Color(0xFFB1FF8E).withValues(alpha: 0.35),
                           blurRadius: 12,
                           offset: const Offset(0, 4),
                         ),
@@ -1315,19 +1498,12 @@ class _MapHomeScreenState extends State<MapHomeScreen>
                           height: 20,
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.circular(3),
-                            border: Border.all(
-                              color: const Color(0xFF171717),
-                              width: 2,
-                            ),
+                            border: Border.all(color: const Color(0xFF171717), width: 2),
                           ),
                           child: Center(
                             child: Transform.rotate(
                               angle: -0.785398,
-                              child: const Icon(
-                                Icons.turn_right,
-                                color: Color(0xFF171717),
-                                size: 11,
-                              ),
+                              child: const Icon(Icons.turn_right, color: Color(0xFF171717), size: 11),
                             ),
                           ),
                         ),
@@ -1474,8 +1650,7 @@ class _MapHomeScreenState extends State<MapHomeScreen>
                     color: const Color(0xFFB1FF8E),
                     boxShadow: [
                       BoxShadow(
-                        color: const Color(0xFFB1FF8E)
-                            .withValues(alpha: 0.35),
+                        color: const Color(0xFFB1FF8E).withValues(alpha: 0.35),
                         blurRadius: 12,
                         offset: const Offset(0, 4),
                       ),
@@ -1489,19 +1664,12 @@ class _MapHomeScreenState extends State<MapHomeScreen>
                         height: 20,
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(3),
-                          border: Border.all(
-                            color: const Color(0xFF171717),
-                            width: 2,
-                          ),
+                          border: Border.all(color: const Color(0xFF171717), width: 2),
                         ),
                         child: Center(
                           child: Transform.rotate(
                             angle: -0.785398,
-                            child: const Icon(
-                              Icons.turn_right,
-                              color: Color(0xFF171717),
-                              size: 11,
-                            ),
+                            child: const Icon(Icons.turn_right, color: Color(0xFF171717), size: 11),
                           ),
                         ),
                       ),
@@ -1732,5 +1900,40 @@ class _MapHomeScreenState extends State<MapHomeScreen>
         ),
       ),
     );
+  }
+
+  /// Animates the map movement to a destination with a "zoom in/out" bounce effect
+  void _animatedMapMove(LatLng destLocation, double destZoom) {
+    final startLat = _mapController.camera.center.latitude;
+    final startLng = _mapController.camera.center.longitude;
+    final startZoom = _mapController.camera.zoom;
+
+    final latTween = Tween<double>(begin: startLat, end: destLocation.latitude);
+    final lngTween = Tween<double>(begin: startLng, end: destLocation.longitude);
+    final zoomTween = Tween<double>(begin: startZoom, end: destZoom);
+
+    // Create a controller locally. Note: we need to dispose it carefully.
+    // If we fire multiple animations, we might want to cancel previous ones,
+    // but for now we assume one at a time.
+    final controller = AnimationController(
+        duration: const Duration(milliseconds: 1500), vsync: this);
+    
+    // easeOutBack gives a slight overshoot (zoom in past target then back out)
+    final Animation<double> animation = CurvedAnimation(
+        parent: controller, curve: Curves.easeOutBack);
+
+    controller.addListener(() {
+      _mapController.move(
+          LatLng(latTween.evaluate(animation), lngTween.evaluate(animation)),
+          zoomTween.evaluate(animation));
+    });
+
+    animation.addStatusListener((status) {
+      if (status == AnimationStatus.completed || status == AnimationStatus.dismissed) {
+        controller.dispose();
+      }
+    });
+
+    controller.forward();
   }
 }
