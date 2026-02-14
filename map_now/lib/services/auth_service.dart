@@ -23,7 +23,7 @@ class AuthService {
 
       try {
         final response = await http.post(
-          Uri.parse('https://maps.amphereai.com/api/login'), // Using new base URL as requested
+          Uri.parse('https://maps.amphereai.com/api/login/route'),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({
             'name': name.trim(),
@@ -31,7 +31,7 @@ class AuthService {
           }),
         );
 
-        if (response.statusCode == 200 || response.statusCode == 201) {
+        if (response.statusCode >= 200 && response.statusCode < 300) {
           final data = jsonDecode(response.body);
           return {
             'success': true,
@@ -54,18 +54,9 @@ class AuthService {
           };
         }
       } catch (e) {
-        // Fallback to MOCK login on network error (failsafe)
-        await Future.delayed(const Duration(milliseconds: 500));
         return {
-          'success': true,
-          'data': {
-            'message': 'Login successful (Offline Mode)',
-            'user': {
-              'name': name,
-              'mobile': mobile,
-              'userId': 'offline_${DateTime.now().millisecondsSinceEpoch}',
-            },
-          },
+          'success': false,
+          'error': 'Network error or server unreachable: $e',
         };
       }
     } catch (e) {

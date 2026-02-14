@@ -359,55 +359,70 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                         SizedBox(
                           width: double.infinity,
                           height: 64,
-                          child: ElevatedButton(
-                            onPressed: _handleLogin,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFFB1FF8E),
-                              foregroundColor: Colors.black,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                              elevation: 0,
-                            ),
-                            child: Text(
-                              'Login',
-                              style: GoogleFonts.poppins(
-                                fontSize: 20,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
+                          child: Consumer<AuthProvider>(
+                            builder: (context, auth, child) {
+                              return ElevatedButton(
+                                onPressed: auth.isLoading ? null : _handleLogin,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFFB1FF8E),
+                                  foregroundColor: Colors.black,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                  elevation: 0,
+                                ),
+                                child: auth.isLoading
+                                    ? const SizedBox(
+                                        width: 24,
+                                        height: 24,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2.5,
+                                          valueColor:
+                                              AlwaysStoppedAnimation<Color>(
+                                                  Colors.black),
+                                        ),
+                                      )
+                                    : Text(
+                                        'Login',
+                                        style: GoogleFonts.poppins(
+                                          fontSize: 20,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                              );
+                            },
                           ),
                         ),
 
                         const SizedBox(height: 32),
 
                         // Sign Up Link
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(
-                              'New User? ',
-                              style: GoogleFonts.poppins(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w300,
-                                color: Colors.white,
-                              ),
-                            ),
-                            GestureDetector(
-                              onTap: () {
-                                // TODO: Navigate to sign up
-                              },
-                              child: Text(
-                                'Sign up here',
-                                style: GoogleFonts.poppins(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w300,
-                                  color: const Color(0xFFB1FF8E),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
+                        // Row(
+                        //   mainAxisAlignment: MainAxisAlignment.center,
+                        //   children: [
+                        //     Text(
+                        //       'New User? ',
+                        //       style: GoogleFonts.poppins(
+                        //         fontSize: 16,
+                        //         fontWeight: FontWeight.w300,
+                        //         color: Colors.white,
+                        //       ),
+                        //     ),
+                        //     GestureDetector(
+                        //       onTap: () {
+                        //         // TODO: Navigate to sign up
+                        //       },
+                        //       child: Text(
+                        //         'Sign up here',
+                        //         style: GoogleFonts.poppins(
+                        //           fontSize: 16,
+                        //           fontWeight: FontWeight.w300,
+                        //           color: const Color(0xFFB1FF8E),
+                        //         ),
+                        //       ),
+                        //     ),
+                        //   ],
+                        // ),
                       ],
                     ),
                   ),
