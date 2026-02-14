@@ -8,13 +8,17 @@ import '../services/geocoding_service.dart';
 import '../services/routing_service.dart';
 
 class MapProvider extends ChangeNotifier {
-  final GeocodingService _geocodingService = GeocodingService();
-  final RoutingService _routingService = RoutingService();
+  final GeocodingService _geocodingService;
+  final RoutingService _routingService;
+
+  MapProvider({GeocodingService? geocodingService, RoutingService? routingService})
+      : _geocodingService = geocodingService ?? GeocodingService(),
+        _routingService = routingService ?? RoutingService();
 
   MapController? _mapController;
   PlaceModel? _startLocation;
   PlaceModel? _destination;
-  List<PlaceModel> _stops = [];
+  final List<PlaceModel> _stops = [];
   RouteModel? _optimizedRoute;
   bool _isLoading = false;
   String? _errorMessage;
@@ -37,8 +41,12 @@ class MapProvider extends ChangeNotifier {
   bool get locationLoading => _locationLoading;
   
   int get stopCount => _stops.length;
-  bool get canAddMoreStops => _stops.length < 3;
+  bool get canAddMoreStops => _stops.length < 5;
   bool get canOptimizeRoute => _startLocation != null && _destination != null;
+
+  // Track whether stops have changed since last optimization
+  bool _stopsNeedOptimization = false;
+  bool get stopsNeedOptimization => _stopsNeedOptimization && _stops.isNotEmpty;
 
   void setMapController(MapController controller) {
     _mapController = controller;
@@ -115,15 +123,27 @@ class MapProvider extends ChangeNotifier {
   }
 
   void addStop(PlaceModel place) {
-    if (_stops.length < 3) {
+    if (_stops.length < 5) {
       _stops.add(place);
+      _stopsNeedOptimization = true;
       notifyListeners();
+    } else {
+      _errorMessage = 'Maximum of 5 stops allowed.';
+      notifyListeners();
+      // Auto-clear helper
+      Future.delayed(const Duration(seconds: 3), () {
+        if (_errorMessage == 'Maximum of 5 stops allowed.') {
+          _errorMessage = null;
+          notifyListeners();
+        }
+      });
     }
   }
 
   void removeStop(int index) {
     if (index >= 0 && index < _stops.length) {
       _stops.removeAt(index);
+      _stopsNeedOptimization = _stops.isNotEmpty;
       notifyListeners();
     }
   }
@@ -137,6 +157,7 @@ class MapProvider extends ChangeNotifier {
     if (newIndex > oldIndex) newIndex--;
     final item = _stops.removeAt(oldIndex);
     _stops.insert(newIndex, item);
+    _stopsNeedOptimization = true;
     notifyListeners();
   }
 
@@ -168,7 +189,68 @@ class MapProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> findOptimizedRoute() async {
+  /// Call routing API for a direct start → destination path (no intermediate stops).
+  Future<void> findDirectRoute() async {
+    if (_startLocation == null || _destination == null) {
+      _errorMessage = 'Please set start location and destination';
+      notifyListeners();
+      return;
+    }
+
+    _isLoading = true;
+    _errorMessage = null;
+    notifyListeners();
+
+    try {
+      final route = await _routingService.getDirectRoute(
+        start: _startLocation!.toLatLngArray(),
+        destination: _destination!.toLatLngArray(),
+      );
+
+      _optimizedRoute = route;
+      _isLoading = false;
+      notifyListeners();
+    } catch (e) {
+      _errorMessage = 'Routing failed: $e';
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  /// Calculates the route by chaining segments (Start -> A -> B -> End).
+  /// Does NOT optimize order. Use this when stops are added/moved manually.
+  Future<void> calculateChainedRoute() async {
+    if (_startLocation == null || _destination == null) {
+      _errorMessage = 'Please set start location and destination';
+      notifyListeners();
+      return;
+    }
+
+    _isLoading = true;
+    _errorMessage = null;
+    notifyListeners();
+
+    try {
+      final route = await _routingService.getChainedRoute(
+        start: _startLocation!.toLatLngArray(),
+        stops: _stops.map((s) => s.toLatLngArray()).toList(),
+        destination: _destination!.toLatLngArray(),
+      );
+
+      _optimizedRoute = route;
+      // We still flagging true, because it's just chained, not "optimized" by server
+      _stopsNeedOptimization = true; 
+      _isLoading = false;
+      notifyListeners();
+    } catch (e) {
+      _errorMessage = 'Route calculation failed: $e';
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  /// Optimize the route using the backend API (reorders stops for best path).
+  Future<void> optimizeRoute() async {
     if (_startLocation == null || _destination == null) {
       _errorMessage = 'Please set start location and destination';
       notifyListeners();
@@ -181,12 +263,13 @@ class MapProvider extends ChangeNotifier {
 
     try {
       final route = await _routingService.getOptimizedRoute(
-        start: _startLocation!.toCoordinate(),
-        stops: _stops.map((stop) => stop.toCoordinate()).toList(),
-        destination: _destination!.toCoordinate(),
+        start: _startLocation!.toLatLngArray(),
+        stops: _stops.map((s) => s.toLatLngArray()).toList(),
+        destination: _destination!.toLatLngArray(),
       );
 
       _optimizedRoute = route;
+      _stopsNeedOptimization = false;
       _isLoading = false;
       notifyListeners();
     } catch (e) {
@@ -203,6 +286,7 @@ class MapProvider extends ChangeNotifier {
     _optimizedRoute = null;
     _searchResults = [];
     _errorMessage = null;
+    _stopsNeedOptimization = false;
     notifyListeners();
   }
 }

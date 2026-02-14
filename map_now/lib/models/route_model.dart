@@ -1,6 +1,6 @@
 class RouteModel {
-  final List<Map<String, double>> orderedCoordinates;
-  final List<Map<String, double>> path;
+  final List<List<double>> orderedCoordinates;
+  final List<List<double>> path;
   final double distance; // in meters
 
   RouteModel({
@@ -13,19 +13,23 @@ class RouteModel {
   double get distanceInKm => distance / 1000;
 
   factory RouteModel.fromJson(Map<String, dynamic> json) {
-    List<Map<String, double>> parseCoordinates(List<dynamic>? coords) {
-      if (coords == null) return [];
-      return coords.map((coord) {
-        return <String, double>{
-          'latitude': (coord['latitude'] ?? 0.0).toDouble(),
-          'longitude': (coord['longitude'] ?? 0.0).toDouble(),
-        };
+    // Parse [[lat, lng], [lat, lng], ...] format
+    List<List<double>> parseCoordArray(dynamic coords) {
+      if (coords == null || coords is! List) return [];
+      return coords.map<List<double>>((coord) {
+        if (coord is List) {
+          return [
+            (coord[0] as num).toDouble(),
+            (coord[1] as num).toDouble(),
+          ];
+        }
+        return [0.0, 0.0];
       }).toList();
     }
 
     return RouteModel(
-      orderedCoordinates: parseCoordinates(json['ordered_coordinates']),
-      path: parseCoordinates(json['path']),
+      orderedCoordinates: parseCoordArray(json['ordered_coordinates']),
+      path: parseCoordArray(json['path']),
       distance: (json['distance'] ?? 0.0).toDouble(),
     );
   }

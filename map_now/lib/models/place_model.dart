@@ -36,4 +36,7 @@ class PlaceModel {
       'longitude': longitude,
     };
   }
+
+  // Convert to [lat, lng] array for routing API
+  List<double> toLatLngArray() => [latitude, longitude];
 }

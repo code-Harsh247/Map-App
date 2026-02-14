@@ -125,6 +125,26 @@ class _MapHomeScreenState extends State<MapHomeScreen>
 
   void _onRouteChanged() {
     final mp = Provider.of<MapProvider>(context, listen: false);
+
+    // Show errors gracefully without blocking UI
+    if (mp.errorMessage != null && mp.errorMessage!.isNotEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              mp.errorMessage!,
+              style: GoogleFonts.poppins(color: Colors.white),
+            ),
+            backgroundColor: Colors.red[700],
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            margin: const EdgeInsets.only(bottom: 20, left: 16, right: 16),
+          ),
+        );
+      }
+    }
+
     // If we have an optimized route, fit camera to it
     if (mp.optimizedRoute != null && mp.optimizedRoute!.path.isNotEmpty) {
       // Calculate bounds
@@ -210,6 +230,27 @@ class _MapHomeScreenState extends State<MapHomeScreen>
 
   void _openNavPanel() {
     setState(() => _showNavPanel = true);
+    
+    // Sync UI controllers with MapProvider stops state
+    // This fixes the issue where waypoints are plotted but not editable after returning to panel
+    final mp = Provider.of<MapProvider>(context, listen: false);
+    if (mp.stops.isNotEmpty && _stopControllers.isEmpty) {
+        for (var stop in mp.stops) {
+            final controller = TextEditingController(text: stop.fullAddress);
+            controller.addListener(_onFieldChanged);
+            _stopControllers.add(controller);
+        }
+    } else if (mp.stops.length != _stopControllers.length) {
+        // Full resync if mismatch
+        for (var c in _stopControllers) c.dispose();
+        _stopControllers.clear();
+        for (var stop in mp.stops) {
+            final controller = TextEditingController(text: stop.fullAddress);
+            controller.addListener(_onFieldChanged);
+            _stopControllers.add(controller);
+        }
+    }
+    
     _panelAnimController.forward();
   }
 
@@ -246,9 +287,13 @@ class _MapHomeScreenState extends State<MapHomeScreen>
         if (mounted) _shadowAnimController.forward();
       });
 
-      // Call routing API for direct start → destination path
+      // Call routing API
       final mapProv = Provider.of<MapProvider>(context, listen: false);
-      mapProv.findDirectRoute();
+      if (mapProv.stops.isNotEmpty) {
+        mapProv.calculateChainedRoute();
+      } else {
+        mapProv.findDirectRoute();
+      }
     });
   }
 

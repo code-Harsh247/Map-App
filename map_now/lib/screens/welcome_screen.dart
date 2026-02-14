@@ -5,7 +5,7 @@ import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 
 class WelcomeScreen extends StatefulWidget {
-  const WelcomeScreen({Key? key}) : super(key: key);
+  const WelcomeScreen({super.key});
 
   @override
   State<WelcomeScreen> createState() => _WelcomeScreenState();
@@ -117,6 +117,15 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     final screenHeight = MediaQuery.of(context).size.height;
     final screenWidth = MediaQuery.of(context).size.width;
 
+    // Responsive image size: 85% width, but max 45% of height to leave room for text
+    final double imageSize = (screenWidth < screenHeight) 
+        ? screenWidth * 0.85 
+        : screenHeight * 0.45;
+        
+    final double topPadding = (screenWidth < screenHeight)
+        ? screenHeight * 0.08
+        : screenHeight * 0.05;
+
     return Scaffold(
       backgroundColor: const Color(0xFF212121),
       resizeToAvoidBottomInset: false,
@@ -126,20 +135,21 @@ class _WelcomeScreenState extends State<WelcomeScreen>
           SafeArea(
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 18.0),
-              child: Column(
-                children: [
-                  SizedBox(height: screenHeight * 0.08),
+              child: SizedBox(
+                width: double.infinity,
+                child: Column(
+                  children: [
+                    SizedBox(height: topPadding),
 
-                  // Navigation Illustration
-                  Center(
-                    child: Image.asset(
+                    // Navigation Illustration
+                    Image.asset(
                       'assets/navigation_illustration.png',
-                      width: screenWidth * 0.85,
-                      height: screenWidth * 0.85,
+                      width: imageSize,
+                      height: imageSize,
                       fit: BoxFit.contain,
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
@@ -156,41 +166,50 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                   child: Column(
                     children: [
                       SizedBox(
-                          height: screenHeight * 0.08 +
-                              screenWidth * 0.85 +
+                          height: topPadding +
+                              imageSize +
                               screenHeight * 0.04),
 
                       // Main Title
-                      Text(
-                        'Navigate your world\nwith ease & confidence',
-                        textAlign: TextAlign.center,
-                        style: GoogleFonts.poppins(
-                          fontSize: 24,
-                          fontWeight: FontWeight.w500,
-                          color: Colors.white,
-                          height: 1.4,
+                      Flexible(
+                        child: SingleChildScrollView(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                'Navigate your world\nwith ease & confidence',
+                                textAlign: TextAlign.center,
+                                style: GoogleFonts.poppins(
+                                  fontSize: (screenWidth < 600) ? 24 : 28,
+                                  fontWeight: FontWeight.w500,
+                                  color: Colors.white,
+                                  height: 1.4,
+                                ),
+                              ),
+
+                              SizedBox(height: screenHeight * 0.03),
+
+                              // Subtitle
+                              Text(
+                                'Discover new places, find your way\nand never get lost again!',
+                                textAlign: TextAlign.center,
+                                style: GoogleFonts.poppins(
+                                  fontSize: (screenWidth < 600) ? 12 : 14,
+                                  fontWeight: FontWeight.w400,
+                                  color: Colors.white,
+                                  height: 1.5,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
 
-                      SizedBox(height: screenHeight * 0.03),
-
-                      // Subtitle
-                      Text(
-                        'Discover new places, find your way\nand never get lost again!',
-                        textAlign: TextAlign.center,
-                        style: GoogleFonts.poppins(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w400,
-                          color: Colors.white,
-                          height: 1.5,
-                        ),
-                      ),
-
-                      const Spacer(),
+                      if (screenHeight > 500) const Spacer(), // Use spacer only if enough height
 
                       // Get Started Button
                       Padding(
-                        padding: const EdgeInsets.only(bottom: 40),
+                        padding: EdgeInsets.only(bottom: (screenHeight > 600) ? 40 : 20),
                         child: SizedBox(
                           width: double.infinity,
                           height: 64,

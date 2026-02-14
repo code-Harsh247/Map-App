@@ -2,6 +2,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../models/place_model.dart';
+import '../services/geocoding_service.dart';
+import '../services/search_history_service.dart';
 
 /// Full-screen search overlay.
 /// Returns [PlaceModel] via Navigator.pop when the user selects a suggestion.
@@ -10,10 +12,10 @@ class LocationSearchScreen extends StatefulWidget {
   final String? initialValue;
 
   const LocationSearchScreen({
-    Key? key,
+    super.key,
     required this.fieldLabel,
     this.initialValue,
-  }) : super(key: key);
+  });
 
   @override
   State<LocationSearchScreen> createState() => _LocationSearchScreenState();
@@ -21,26 +23,15 @@ class LocationSearchScreen extends StatefulWidget {
 
 class _LocationSearchScreenState extends State<LocationSearchScreen> {
   final TextEditingController _controller = TextEditingController();
+  final GeocodingService _geocodingService = GeocodingService();
+  final SearchHistoryService _historyService = SearchHistoryService();
   final FocusNode _focusNode = FocusNode();
 
   List<PlaceModel> _results = [];
+  List<PlaceModel> _history = [];
   bool _isLoading = false;
   String? _error;
   Timer? _debounce;
-
-  // ── Dummy locations for testing ──
-  static final List<PlaceModel> _dummyPlaces = [
-    PlaceModel(fullAddress: 'MG Road, Bengaluru, Karnataka 560001', latitude: 12.9758, longitude: 77.6045, placeId: 'dummy_1'),
-    PlaceModel(fullAddress: 'Koramangala, Bengaluru, Karnataka 560034', latitude: 12.9352, longitude: 77.6245, placeId: 'dummy_2'),
-    PlaceModel(fullAddress: 'Indiranagar, Bengaluru, Karnataka 560038', latitude: 12.9784, longitude: 77.6408, placeId: 'dummy_3'),
-    PlaceModel(fullAddress: 'Whitefield, Bengaluru, Karnataka 560066', latitude: 12.9698, longitude: 77.7500, placeId: 'dummy_4'),
-    PlaceModel(fullAddress: 'Jayanagar, Bengaluru, Karnataka 560041', latitude: 12.9308, longitude: 77.5838, placeId: 'dummy_5'),
-    PlaceModel(fullAddress: 'HSR Layout, Bengaluru, Karnataka 560102', latitude: 12.9116, longitude: 77.6389, placeId: 'dummy_6'),
-    PlaceModel(fullAddress: 'Electronic City, Bengaluru, Karnataka 560100', latitude: 12.8399, longitude: 77.6770, placeId: 'dummy_7'),
-    PlaceModel(fullAddress: 'Malleshwaram, Bengaluru, Karnataka 560003', latitude: 12.9969, longitude: 77.5707, placeId: 'dummy_8'),
-    PlaceModel(fullAddress: 'Brigade Road, Bengaluru, Karnataka 560025', latitude: 12.9724, longitude: 77.6065, placeId: 'dummy_9'),
-    PlaceModel(fullAddress: 'Hebbal, Bengaluru, Karnataka 560024', latitude: 13.0358, longitude: 77.5970, placeId: 'dummy_10'),
-  ];
 
   @override
   void initState() {
@@ -48,10 +39,36 @@ class _LocationSearchScreenState extends State<LocationSearchScreen> {
     if (widget.initialValue != null && widget.initialValue!.isNotEmpty) {
       _controller.text = widget.initialValue!;
     }
+    _loadHistory();
     // Auto-focus the search field
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _focusNode.requestFocus();
     });
+  }
+
+  Future<void> _loadHistory() async {
+    final history = await _historyService.getHistory();
+    if (mounted) {
+      setState(() {
+        _history = history;
+      });
+    }
+  }
+
+  Future<void> _addToHistory(PlaceModel place) async {
+    await _historyService.addToHistory(place);
+    // Don't need to reload full history here if we just pop, 
+    // but if user stays on screen (unlikely), valid.
+  }
+
+  Future<void> _deleteHistoryItem(int index) async {
+    await _historyService.removeFromHistory(index);
+    _loadHistory();
+  }
+
+  Future<void> _clearAllHistory() async {
+    await _historyService.clearHistory();
+    _loadHistory();
   }
 
   @override
@@ -71,6 +88,16 @@ class _LocationSearchScreenState extends State<LocationSearchScreen> {
       });
       return;
     }
+    
+    // Minimum 3 characters requirement
+    if (query.trim().length < 3) {
+      setState(() {
+        _results = [];
+        _error = null;
+      });
+      return;
+    }
+
     _debounce = Timer(const Duration(milliseconds: 400), () {
       _performSearch(query.trim());
     });
@@ -81,25 +108,27 @@ class _LocationSearchScreenState extends State<LocationSearchScreen> {
       _isLoading = true;
       _error = null;
     });
-
-    // Simulate short network delay, then filter dummy places
-    await Future.delayed(const Duration(milliseconds: 200));
-    if (!mounted) return;
-
-    final lowerQ = query.toLowerCase();
-    final filtered = _dummyPlaces
-        .where((p) => p.fullAddress.toLowerCase().contains(lowerQ))
-        .toList();
-
-    setState(() {
-      _results = filtered.isEmpty ? _dummyPlaces : filtered;
-      _isLoading = false;
-    });
+    try {
+      final results = await _geocodingService.searchAddress(query);
+      if (!mounted) return;
+      setState(() {
+        _results = results;
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'Search failed. Please try again.';
+        _results = [];
+        _isLoading = false;
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final topPadding = MediaQuery.of(context).padding.top;
+    final bool showHistory = _controller.text.isEmpty && _history.isNotEmpty;
 
     return Scaffold(
       backgroundColor: const Color(0xFF171717),
@@ -182,6 +211,7 @@ class _LocationSearchScreenState extends State<LocationSearchScreen> {
                                 setState(() {
                                   _results = [];
                                   _error = null;
+                                  _loadHistory(); // Reload history on clear
                                 });
                               },
                               child: Icon(
@@ -205,7 +235,7 @@ class _LocationSearchScreenState extends State<LocationSearchScreen> {
             ),
           ),
 
-          // ── Results ──
+          // ── Results or History ──
           Expanded(
             child: _isLoading
                 ? const Center(
@@ -228,57 +258,150 @@ class _LocationSearchScreenState extends State<LocationSearchScreen> {
                           ),
                         ),
                       )
-                    : _results.isEmpty
-                        ? Center(
-                            child: Text(
-                              _controller.text.isEmpty
-                                  ? 'Type to search for a location'
-                                  : 'No results found',
-                              style: GoogleFonts.poppins(
-                                color: Colors.white.withValues(alpha: 0.4),
-                                fontSize: 13,
-                              ),
-                            ),
-                          )
-                        : ListView.separated(
-                            padding: const EdgeInsets.symmetric(vertical: 8),
-                            itemCount: _results.length,
-                            separatorBuilder: (_, __) => Divider(
-                              color: Colors.white.withValues(alpha: 0.08),
-                              height: 1,
-                              indent: 52,
-                            ),
-                            itemBuilder: (context, index) {
-                              final place = _results[index];
-                              return ListTile(
-                                dense: true,
-                                contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                  vertical: 2,
-                                ),
-                                leading: Icon(
-                                  Icons.location_on_outlined,
-                                  color: Colors.white.withValues(alpha: 0.5),
-                                  size: 20,
-                                ),
-                                title: Text(
-                                  place.fullAddress,
+                    : (showHistory
+                        ? _buildHistoryList()
+                        : _results.isEmpty
+                            ? Center(
+                                child: Text(
+                                  _controller.text.isEmpty
+                                      ? 'Type to search for a location'
+                                      : _controller.text.length < 3 
+                                        ? 'Type at least 3 characters' 
+                                        : 'No results found',
                                   style: GoogleFonts.poppins(
-                                    color: Colors.white,
+                                    color: Colors.white.withValues(alpha: 0.4),
                                     fontSize: 13,
                                   ),
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
                                 ),
-                                onTap: () {
-                                  Navigator.pop(context, place);
-                                },
-                              );
-                            },
-                          ),
+                              )
+                            : _buildResultsList()),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildHistoryList() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Recent Searches',
+                style: GoogleFonts.poppins(
+                  color: Colors.white.withValues(alpha: 0.6),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              GestureDetector(
+                onTap: _clearAllHistory,
+                child: Text(
+                  'Clear All',
+                  style: GoogleFonts.poppins(
+                    color: const Color(0xFFB1FF8E),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: ListView.separated(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            itemCount: _history.length,
+            separatorBuilder: (_, __) => Divider(
+              color: Colors.white.withValues(alpha: 0.08),
+              height: 1,
+              indent: 52,
+            ),
+            itemBuilder: (context, index) {
+              final place = _history[index];
+              return ListTile(
+                dense: true,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 2,
+                ),
+                leading: const Icon(
+                  Icons.history,
+                  color: Color(0xFFB1FF8E),
+                  size: 20,
+                ),
+                title: Text(
+                  place.fullAddress,
+                  style: GoogleFonts.poppins(
+                    color: Colors.white,
+                    fontSize: 13,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: GestureDetector(
+                  onTap: () => _deleteHistoryItem(index),
+                  child: Icon(
+                    Icons.close,
+                    color: Colors.white.withValues(alpha: 0.3),
+                    size: 16,
+                  ),
+                ),
+                onTap: () {
+                  // Re-add to move to top
+                  _addToHistory(place);
+                  Navigator.pop(context, place);
+                },
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildResultsList() {
+    return ListView.separated(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemCount: _results.length,
+      separatorBuilder: (_, __) => Divider(
+        color: Colors.white.withValues(alpha: 0.08),
+        height: 1,
+        indent: 52,
+      ),
+      itemBuilder: (context, index) {
+        final place = _results[index];
+        return ListTile(
+          dense: true,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 2,
+          ),
+          leading: Icon(
+            Icons.location_on_outlined,
+            color: Colors.white.withValues(alpha: 0.5),
+            size: 20,
+          ),
+          title: Text(
+            place.fullAddress,
+            style: GoogleFonts.poppins(
+              color: Colors.white,
+              fontSize: 13,
+            ),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          onTap: () async {
+            await _addToHistory(place);
+            if (!mounted) return;
+            Navigator.pop(context, place);
+          },
+        );
+      },
     );
   }
 }

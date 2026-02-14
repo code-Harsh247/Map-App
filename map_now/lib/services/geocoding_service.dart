@@ -17,9 +17,9 @@ class GeocodingService {
       if (response.statusCode == 200) {
         final Map<String, dynamic> data = jsonDecode(response.body);
         
-        // Assuming the API returns a list of places
-        if (data['places'] != null && data['places'] is List) {
-          return (data['places'] as List)
+        // API returns { "status": "success", "results": [...] }
+        if (data['results'] != null && data['results'] is List) {
+          return (data['results'] as List)
               .map((place) => PlaceModel.fromJson(place))
               .toList();
         } else if (data['fullAddress'] != null) {
