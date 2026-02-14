@@ -161,6 +161,38 @@ class MapProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Reorders the full list of waypoints: [Start, ...Stops, Destination]
+  void reorderWaypoints(int oldIndex, int newIndex) {
+    if (_startLocation == null || _destination == null) return;
+    
+    // Construct full list
+    List<PlaceModel> allPoints = [_startLocation!, ..._stops, _destination!];
+    
+    // Apply reorder
+    if (newIndex > oldIndex) newIndex--;
+    // Check bounds
+    if (oldIndex < 0 || oldIndex >= allPoints.length) return;
+    if (newIndex < 0 || newIndex >= allPoints.length) return; // Should insert at end? No, newIndex is position.
+    
+    final item = allPoints.removeAt(oldIndex);
+    allPoints.insert(newIndex, item);
+    
+    // Deconstruct back to Start, Stops, Destination
+    _startLocation = allPoints.first;
+    _destination = allPoints.last;
+    
+    // Middleware points are the new stops
+    if (allPoints.length > 2) {
+      _stops.clear();
+      _stops.addAll(allPoints.sublist(1, allPoints.length - 1));
+    } else {
+      _stops.clear();
+    }
+    
+    _stopsNeedOptimization = true;
+    notifyListeners();
+  }
+
   void clearRoute() {
     _optimizedRoute = null;
     notifyListeners();

@@ -411,10 +411,47 @@ class _MapHomeScreenState extends State<MapHomeScreen>
         _stopControllers.removeAt(index);
       });
       // Re-calculate route (chained) whenever a stop is removed
-       if (mp.startLocation != null && mp.destination != null) {
-         mp.calculateChainedRoute();
+      if (mp.startLocation != null && mp.destination != null) {
+        mp.calculateChainedRoute();
       }
     }
+  }
+
+  void _reorderWaypoints(int oldIndex, int newIndex) {
+    final mp = Provider.of<MapProvider>(context, listen: false);
+    mp.reorderWaypoints(oldIndex, newIndex);
+    
+    // Sync controllers with new provider state
+    _syncControllersWithProvider(mp);
+    
+    // Re-calculate route
+    if (mp.startLocation != null && mp.destination != null) {
+      mp.calculateChainedRoute();
+    }
+  }
+  
+  void _syncControllersWithProvider(MapProvider mp) {
+      setState(() {
+          // Sync Start
+          if (mp.startLocation != null) {
+            _locationController.text = mp.startLocation!.fullAddress;
+          }
+          
+          // Sync Destination
+          if (mp.destination != null) {
+            _destinationController.text = mp.destination!.fullAddress;
+          }
+          
+          // Sync Stops (Count is constant in a swap, but let's be safe)
+          // Actually, in a reorder, the count of intermediate stops should be constant unless I dragged start to dest?
+          // No, logic is [Start, ...Stops, Dest]. Size is constant. 
+          // Stops size is (Total - 2). So it is constant.
+          for (int i = 0; i < mp.stops.length; i++) {
+              if (i < _stopControllers.length) {
+                  _stopControllers[i].text = mp.stops[i].fullAddress;
+              }
+          }
+      });
   }
 
   void _reorderStop(int oldIndex, int newIndex) {
@@ -1245,119 +1282,101 @@ class _MapHomeScreenState extends State<MapHomeScreen>
                             child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                // ── Your Location (fixed top) ──
-                                _buildFieldRow(
-                                  icon: _buildMeMarker(),
-                                  child: Container(
-                                    height: 38,
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF444444),
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: TextField(
-                                      controller: _locationController,
-                                      readOnly: true,
-                                      onTap: () => _openLocationSearch(
-                                        label: 'Your Location',
-                                        controller: _locationController,
-                                        onSelected: (place) {
-                                          final mp = Provider.of<MapProvider>(context, listen: false);
-                                          mp.setStartLocation(place);
-                                        },
-                                      ),
-                                      style: GoogleFonts.poppins(
-                                        fontSize: 13,
-                                        color: Colors.white,
-                                      ),
-                                      textAlignVertical: TextAlignVertical.center,
-                                      decoration: InputDecoration(
-                                        hintText: 'Your Location',
-                                        hintStyle: GoogleFonts.poppins(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w400,
-                                          color: Colors.white,
-                                        ),
-                                        border: InputBorder.none,
-                                        isCollapsed: true,
-                                        contentPadding:
-                                            const EdgeInsets.symmetric(
-                                          horizontal: 16,
-                                          vertical: 11,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
+                                // ── Unified Reorderable List (Start - Stops - Dest) ──
+                                ReorderableListView.builder(
+                                  shrinkWrap: true,
+                                  physics: const NeverScrollableScrollPhysics(),
+                                  buildDefaultDragHandles: false,
+                                  proxyDecorator: (child, index, animation) {
+                                    return Material(
+                                      color: Colors.transparent,
+                                      elevation: 0,
+                                      child: child,
+                                    );
+                                  },
+                                  onReorder: _reorderWaypoints, 
+                                  // Total items = Start (1) + Stops + Dest (1)
+                                  itemCount: 2 + _stopControllers.length,
+                                  itemBuilder: (context, index) {
+                                    final isStart = index == 0;
+                                    final isDest = index == (_stopControllers.length + 1);
+                                    final isStop = !isStart && !isDest;
+                                    final stopIndex = isStop ? index - 1 : -1;
 
-                                // ── Stops list (reorderable) ──
-                                if (_stopControllers.isNotEmpty)
-                                  ReorderableListView.builder(
-                                    shrinkWrap: true,
-                                    physics: const NeverScrollableScrollPhysics(),
-                                    buildDefaultDragHandles: false,
-                                    proxyDecorator: (child, index, animation) {
-                                      return Material(
-                                        color: Colors.transparent,
-                                        elevation: 0,
-                                        child: child,
-                                      );
-                                    },
-                                    onReorder: _reorderStop,
-                                    itemCount: _stopControllers.length,
-                                    itemBuilder: (context, index) {
-                                      return Column(
-                                        key: ValueKey('stop_$index'),
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          _buildDottedConnector(),
-                                          _buildFieldRow(
-                                            icon: _buildStopMarker(),
-                                            child: Container(
-                                              height: 38,
-                                              decoration: BoxDecoration(
-                                                color: const Color(0xFF444444),
-                                                borderRadius: BorderRadius.circular(12),
-                                              ),
-                                              child: Row(
-                                                children: [
-                                                  Expanded(
-                                                    child: TextField(
-                                                      controller: _stopControllers[index],
-                                                      readOnly: true,
-                                                      onTap: () => _openLocationSearch(
-                                                        label: 'Stop ${index + 1}',
-                                                        controller: _stopControllers[index],
-                                                        onSelected: (place) {
-                                                          final mp = Provider.of<MapProvider>(context, listen: false);
-                                                          if (index < mp.stops.length) {
-                                                            mp.removeStop(index);
-                                                          }
-                                                          mp.addStop(place);
-                                                        },
-                                                      ),
-                                                      style: GoogleFonts.poppins(
+                                    return Column(
+                                      key: ValueKey('waypoint_$index'),
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        // Connector above item (except for Start)
+                                        if (!isStart) _buildDottedConnector(),
+                                        
+                                        _buildFieldRow(
+                                          icon: ReorderableDragStartListener(
+                                            index: index,
+                                            child: isStart 
+                                                ? _buildMeMarker() 
+                                                : (isDest ? _buildDestinationIcon() : _buildStopMarker()),
+                                          ),
+                                          child: Container(
+                                            height: 38,
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xFF444444),
+                                              borderRadius: BorderRadius.circular(12),
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                Expanded(
+                                                  child: TextField(
+                                                    controller: isStart 
+                                                        ? _locationController 
+                                                        : (isDest ? _destinationController : _stopControllers[stopIndex]),
+                                                    readOnly: true,
+                                                    onTap: () => _openLocationSearch(
+                                                      label: isStart 
+                                                          ? 'Your Location' 
+                                                          : (isDest ? 'Your Destination' : 'Stop ${stopIndex + 1}'),
+                                                      controller: isStart 
+                                                          ? _locationController 
+                                                          : (isDest ? _destinationController : _stopControllers[stopIndex]),
+                                                      onSelected: (place) {
+                                                        final mp = Provider.of<MapProvider>(context, listen: false);
+                                                        if (isStart) {
+                                                          mp.setStartLocation(place);
+                                                        } else if (isDest) {
+                                                          mp.setDestination(place);
+                                                        } else {
+                                                          // Replace existing stop
+                                                          mp.removeStop(stopIndex);
+                                                          mp.addStop(place); 
+                                                        }
+                                                      },
+                                                    ),
+                                                    style: GoogleFonts.poppins(
+                                                      fontSize: 13,
+                                                      color: Colors.white,
+                                                    ),
+                                                    textAlignVertical: TextAlignVertical.center,
+                                                    decoration: InputDecoration(
+                                                      hintText: isStart 
+                                                          ? 'Your Location' 
+                                                          : (isDest ? 'Your Destination' : 'Stop ${stopIndex + 1}'),
+                                                      hintStyle: GoogleFonts.poppins(
                                                         fontSize: 13,
+                                                        fontWeight: FontWeight.w400,
                                                         color: Colors.white,
                                                       ),
-                                                      textAlignVertical: TextAlignVertical.center,
-                                                      decoration: InputDecoration(
-                                                        hintText: 'Stop ${index + 1}',
-                                                        hintStyle: GoogleFonts.poppins(
-                                                          fontSize: 13,
-                                                          fontWeight: FontWeight.w400,
-                                                          color: Colors.white.withValues(alpha: 0.6),
-                                                        ),
-                                                        border: InputBorder.none,
-                                                        isCollapsed: true,
-                                                        contentPadding: const EdgeInsets.symmetric(
-                                                          horizontal: 16,
-                                                          vertical: 11,
-                                                        ),
+                                                      border: InputBorder.none,
+                                                      isCollapsed: true,
+                                                      contentPadding: const EdgeInsets.symmetric(
+                                                        horizontal: 16,
+                                                        vertical: 11,
                                                       ),
                                                     ),
                                                   ),
-                                                  // Drag Handle
-                                                  ReorderableDragStartListener(
+                                                ),
+                                                
+                                                // Drag Handle (Right side)
+                                                ReorderableDragStartListener(
                                                     index: index,
                                                     child: Padding(
                                                       padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -1367,14 +1386,22 @@ class _MapHomeScreenState extends State<MapHomeScreen>
                                                         size: 20,
                                                       ),
                                                     ),
+                                                ),
+
+                                                // Close/Remove Button (Only for stops)
+                                                if (isStop)
+                                                  Column(
+                                                    children: [
+                                                        Container(
+                                                            width: 1,
+                                                            height: 16,
+                                                            color: Colors.white.withValues(alpha: 0.1),
+                                                        ),
+                                                    ],
                                                   ),
-                                                  Container(
-                                                    width: 1,
-                                                    height: 16,
-                                                    color: Colors.white.withValues(alpha: 0.1),
-                                                  ),
+                                                if (isStop)
                                                   GestureDetector(
-                                                    onTap: () => _removeStop(index),
+                                                    onTap: () => _removeStop(stopIndex),
                                                     child: Padding(
                                                       padding: const EdgeInsets.fromLTRB(8, 0, 12, 0),
                                                       child: Icon(
@@ -1383,61 +1410,16 @@ class _MapHomeScreenState extends State<MapHomeScreen>
                                                         color: Colors.white.withValues(alpha: 0.5),
                                                       ),
                                                     ),
-                                                  ),
-                                                ],
-                                              ),
+                                                  )
+                                                else
+                                                  const SizedBox(width: 12), // Spacer for non-removable items
+                                              ],
                                             ),
                                           ),
-                                        ],
-                                      );
-                                    },
-                                  ),
-
-                                // ── Dotted connector to destination ──
-                                _buildDottedConnector(),
-
-                                // ── Your Destination (sticky bottom) ──
-                                _buildFieldRow(
-                                  icon: _buildDestinationIcon(),
-                                  child: Container(
-                                    height: 38,
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF444444),
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: TextField(
-                                      controller: _destinationController,
-                                      readOnly: true,
-                                      onTap: () => _openLocationSearch(
-                                        label: 'Your Destination',
-                                        controller: _destinationController,
-                                        onSelected: (place) {
-                                          final mp = Provider.of<MapProvider>(context, listen: false);
-                                          mp.setDestination(place);
-                                        },
-                                      ),
-                                      style: GoogleFonts.poppins(
-                                        fontSize: 13,
-                                        color: Colors.white,
-                                      ),
-                                      textAlignVertical: TextAlignVertical.center,
-                                      decoration: InputDecoration(
-                                        hintText: 'Your Destination',
-                                        hintStyle: GoogleFonts.poppins(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w400,
-                                          color: Colors.white,
                                         ),
-                                        border: InputBorder.none,
-                                        isCollapsed: true,
-                                        contentPadding:
-                                            const EdgeInsets.symmetric(
-                                          horizontal: 16,
-                                          vertical: 11,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
+                                      ],
+                                    );
+                                  },
                                 ),
                               ],
                             ),
