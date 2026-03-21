@@ -17,7 +17,7 @@ class RouteModel {
     List<List<double>> parseCoordArray(dynamic coords) {
       if (coords == null || coords is! List) return [];
       return coords.map<List<double>>((coord) {
-        if (coord is List) {
+        if (coord is List && coord.length >= 2) {
           return [
             (coord[0] as num).toDouble(),
             (coord[1] as num).toDouble(),

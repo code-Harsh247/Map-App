@@ -23,6 +23,8 @@ class RoutingService {
       } else {
         throw Exception('Failed to get route. Status: ${response.statusCode}');
       }
+    } on Exception {
+      rethrow;
     } catch (e) {
       throw Exception('Routing error: $e');
     }

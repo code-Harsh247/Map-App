@@ -11,7 +11,6 @@ import 'package:geolocator_platform_interface/geolocator_platform_interface.dart
 import 'dart:io';
 import 'dart:async';
 
-import 'package:map_now/screens/widgets/pulsing_marker.dart';
 
 // Mock Http Client to avoid 400 errors from tile loading
 class MockHttpClient extends Fake implements HttpClient {

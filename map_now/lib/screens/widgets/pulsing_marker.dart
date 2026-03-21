@@ -41,7 +41,7 @@ class _PulsingLocationMarkerState extends State<PulsingLocationMarker>
               height: 80 * _controller.value,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: widget.color.withOpacity(0.3 * (1 - _controller.value)),
+                color: widget.color.withValues(alpha: 0.3 * (1 - _controller.value)),
               ),
             );
           },
@@ -56,7 +56,7 @@ class _PulsingLocationMarkerState extends State<PulsingLocationMarker>
             border: Border.all(color: Colors.white, width: 3),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.3),
+                color: Colors.black.withValues(alpha: 0.3),
                 blurRadius: 5,
                 offset: const Offset(0, 2),
               ),

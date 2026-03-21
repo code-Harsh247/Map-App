@@ -102,4 +102,20 @@ class MockRoutingService extends _i1.Mock implements _i6.RoutingService {
             returnValue: _i3.Future<_i7.RouteModel?>.value(),
           )
           as _i3.Future<_i7.RouteModel?>);
+
+  @override
+  _i3.Future<_i7.RouteModel?> getOptimizedRoute({
+    required List<double>? start,
+    required List<List<double>>? stops,
+    required List<double>? destination,
+  }) =>
+      (super.noSuchMethod(
+            Invocation.method(#getOptimizedRoute, [], {
+              #start: start,
+              #stops: stops,
+              #destination: destination,
+            }),
+            returnValue: _i3.Future<_i7.RouteModel?>.value(),
+          )
+          as _i3.Future<_i7.RouteModel?>);
 }

@@ -117,6 +117,10 @@ class _SplashScreenState extends State<SplashScreen>
     await authProvider.loadUserFromStorage();
 
     if (mounted) {
+      // Sync token to MapProvider
+      final mapProvider = Provider.of<MapProvider>(context, listen: false);
+      mapProvider.setToken(authProvider.token);
+
       if (authProvider.isAuthenticated) {
         Navigator.of(context).pushReplacementNamed('/home');
       } else {

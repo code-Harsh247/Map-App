@@ -23,7 +23,7 @@ class SearchHistoryService {
     
     // Remove if exists to avoid duplicates (and move to top)
     history.removeWhere((p) => 
-      p.placeId == place.placeId && p.placeId.isNotEmpty || 
+      (p.placeId == place.placeId && p.placeId.isNotEmpty) || 
       p.fullAddress == place.fullAddress
     );
 
@@ -35,7 +35,7 @@ class SearchHistoryService {
       history.removeLast();
     }
 
-    _saveHistory(history);
+    await _saveHistory(history);
   }
 
   Future<void> removeFromHistory(int index) async {

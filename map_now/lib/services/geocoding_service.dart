@@ -31,6 +31,8 @@ class GeocodingService {
       } else {
         throw Exception('Failed to search address. Status: ${response.statusCode}');
       }
+    } on Exception {
+      rethrow;
     } catch (e) {
       throw Exception('Network error: $e');
     }

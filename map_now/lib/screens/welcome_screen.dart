@@ -98,6 +98,20 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     final success = await authProvider.login(name, phone);
 
     if (success && mounted) {
+      // Check if there's a demo mode message to show
+      if (authProvider.errorMessage != null && 
+          authProvider.errorMessage!.contains('demo mode')) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              authProvider.errorMessage!,
+              style: GoogleFonts.poppins(),
+            ),
+            backgroundColor: Colors.orange[600],
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
       Navigator.of(context).pushReplacementNamed('/home');
     } else if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(

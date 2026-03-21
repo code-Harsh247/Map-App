@@ -10,6 +10,20 @@ import '../services/routing_service.dart';
 class MapProvider extends ChangeNotifier {
   final GeocodingService _geocodingService;
   final RoutingService _routingService;
+  bool _disposed = false;
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
+
+  @override
+  void notifyListeners() {
+    if (!_disposed) {
+      super.notifyListeners();
+    }
+  }
 
   MapProvider({GeocodingService? geocodingService, RoutingService? routingService})
       : _geocodingService = geocodingService ?? GeocodingService(),

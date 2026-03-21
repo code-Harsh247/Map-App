@@ -7,6 +7,8 @@ import '../providers/map_provider.dart';
 import '../providers/auth_provider.dart';
 import '../models/place_model.dart';
 import 'location_search_screen.dart';
+import 'navigation_screen.dart';
+import 'feedback_screen.dart';
 import 'widgets/pulsing_marker.dart';
 import 'package:geolocator/geolocator.dart';
 
@@ -95,6 +97,8 @@ class _MapHomeScreenState extends State<MapHomeScreen>
       final mapProvider = Provider.of<MapProvider>(context, listen: false);
       mapProvider.setMapController(_mapController);
       mapProvider.getUserLocation();
+      // Automatically open the from/to form on startup
+      _openNavPanel();
     });
     
     // Auto-zoom to route when calculated
@@ -126,6 +130,23 @@ class _MapHomeScreenState extends State<MapHomeScreen>
 
   void _onRouteChanged() {
     final mp = Provider.of<MapProvider>(context, listen: false);
+
+    // Auto-fill start location once GPS becomes available (if panel is open and field is empty)
+    if (_showNavPanel &&
+        _locationController.text.trim().isEmpty &&
+        mp.startLocation == null &&
+        mp.userLocation != null) {
+      final currentLoc = PlaceModel(
+        fullAddress: 'My Location',
+        latitude: mp.userLocation!.latitude,
+        longitude: mp.userLocation!.longitude,
+        placeId: 'current_location',
+      );
+      mp.setStartLocation(currentLoc);
+      setState(() {
+        _locationController.text = 'My Location';
+      });
+    }
 
     // Show errors via Modal as requested
     if (mp.errorMessage != null && mp.errorMessage!.isNotEmpty) {
@@ -232,6 +253,41 @@ class _MapHomeScreenState extends State<MapHomeScreen>
     setState(() {}); // rebuild to re-evaluate Find Route enabled state
   }
 
+  void _fitMapToPoints() {
+    final mp = Provider.of<MapProvider>(context, listen: false);
+    final points = <LatLng>[];
+    if (mp.startLocation != null) {
+      points.add(LatLng(mp.startLocation!.latitude, mp.startLocation!.longitude));
+    }
+    for (final stop in mp.stops) {
+      points.add(LatLng(stop.latitude, stop.longitude));
+    }
+    if (mp.destination != null) {
+      points.add(LatLng(mp.destination!.latitude, mp.destination!.longitude));
+    }
+    if (points.length == 1) {
+      _animatedMapMove(points.first, 14);
+      return;
+    }
+    if (points.length < 2) return;
+    double minLat = points.first.latitude;
+    double maxLat = points.first.latitude;
+    double minLng = points.first.longitude;
+    double maxLng = points.first.longitude;
+    for (final p in points) {
+      if (p.latitude < minLat) minLat = p.latitude;
+      if (p.latitude > maxLat) maxLat = p.latitude;
+      if (p.longitude < minLng) minLng = p.longitude;
+      if (p.longitude > maxLng) maxLng = p.longitude;
+    }
+    _mapController.fitCamera(
+      CameraFit.bounds(
+        bounds: LatLngBounds(LatLng(minLat, minLng), LatLng(maxLat, maxLng)),
+        padding: const EdgeInsets.only(top: 120, bottom: 320, left: 60, right: 60),
+      ),
+    );
+  }
+
   Future<void> _openLocationSearch({
     required String label,
     required TextEditingController controller,
@@ -251,6 +307,7 @@ class _MapHomeScreenState extends State<MapHomeScreen>
         controller.text = result.fullAddress;
       });
       onSelected(result);
+      _fitMapToPoints();
     }
   }
 
@@ -268,7 +325,9 @@ class _MapHomeScreenState extends State<MapHomeScreen>
         }
     } else if (mp.stops.length != _stopControllers.length) {
         // Full resync if mismatch
-        for (var c in _stopControllers) c.dispose();
+        for (var c in _stopControllers) {
+          c.dispose();
+        }
         _stopControllers.clear();
         for (var stop in mp.stops) {
             final controller = TextEditingController(text: stop.fullAddress);
@@ -278,6 +337,21 @@ class _MapHomeScreenState extends State<MapHomeScreen>
     }
     
     _panelAnimController.forward();
+
+    // Auto-set start location to current GPS if not already set
+    final hasStart = _locationController.text.trim().isNotEmpty;
+    if (!hasStart && mp.userLocation != null && mp.startLocation == null) {
+      final currentLoc = PlaceModel(
+        fullAddress: 'My Location',
+        latitude: mp.userLocation!.latitude,
+        longitude: mp.userLocation!.longitude,
+        placeId: 'current_location',
+      );
+      mp.setStartLocation(currentLoc);
+      setState(() {
+        _locationController.text = 'My Location';
+      });
+    }
   }
 
   void _closeNavPanel() {
@@ -395,6 +469,7 @@ class _MapHomeScreenState extends State<MapHomeScreen>
       setState(() {
         _stopControllers.add(TextEditingController(text: result.fullAddress));
       });
+      _fitMapToPoints();
       // Re-calculate route (chained) whenever a stop is added
       if (mp.startLocation != null && mp.destination != null) {
          mp.calculateChainedRoute();
@@ -728,28 +803,6 @@ class _MapHomeScreenState extends State<MapHomeScreen>
             ],
           ),
 
-          // ── Bottom gradient overlay ──
-          Positioned(
-            bottom: 0,
-            left: 0,
-            right: 0,
-            child: IgnorePointer(
-              child: Container(
-                height: 160,
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.bottomCenter,
-                    end: Alignment.topCenter,
-                    colors: [
-                      Color(0xFF171717),
-                      Color(0x00262F3D),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-
           // ── Hamburger menu button (top-left) ──
           Positioned(
             top: topPadding + 12,
@@ -883,6 +936,38 @@ class _MapHomeScreenState extends State<MapHomeScreen>
               child: SlideTransition(
                 position: _panelSlideAnimation,
                 child: _buildNavigationPanel(mapProvider),
+              ),
+            ),
+
+          // ── Start Navigation FAB ──
+          if (mapProvider.optimizedRoute != null && mapProvider.userLocation != null)
+            Positioned(
+              right: 16,
+              bottom: 240,
+              child: FloatingActionButton.extended(
+                heroTag: 'start_nav',
+                backgroundColor: const Color(0xFF4285F4),
+                onPressed: () {
+                  if (mapProvider.destination == null) return;
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => NavigationScreen(
+                        route: mapProvider.optimizedRoute!,
+                        startPosition: mapProvider.userLocation!,
+                        destination: mapProvider.destination!,
+                        startLocation: mapProvider.startLocation,
+                      ),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.navigation, color: Colors.white),
+                label: Text(
+                  'Start',
+                  style: GoogleFonts.poppins(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
             ),
 
@@ -1129,7 +1214,8 @@ class _MapHomeScreenState extends State<MapHomeScreen>
                                   hintStyle: GoogleFonts.poppins(
                                     fontSize: 13,
                                     fontWeight: FontWeight.w400,
-                                    color: Colors.white,
+                                    fontStyle: FontStyle.italic,
+                                    color: Colors.white.withValues(alpha: 0.35),
                                   ),
                                   border: InputBorder.none,
                                   isCollapsed: true,
@@ -1171,7 +1257,8 @@ class _MapHomeScreenState extends State<MapHomeScreen>
                                   hintStyle: GoogleFonts.poppins(
                                     fontSize: 13,
                                     fontWeight: FontWeight.w400,
-                                    color: Colors.white,
+                                    fontStyle: FontStyle.italic,
+                                    color: Colors.white.withValues(alpha: 0.35),
                                   ),
                                   border: InputBorder.none,
                                   isCollapsed: true,
@@ -1363,7 +1450,8 @@ class _MapHomeScreenState extends State<MapHomeScreen>
                                                       hintStyle: GoogleFonts.poppins(
                                                         fontSize: 13,
                                                         fontWeight: FontWeight.w400,
-                                                        color: Colors.white,
+                                                        fontStyle: FontStyle.italic,
+                                                        color: Colors.white.withValues(alpha: 0.35),
                                                       ),
                                                       border: InputBorder.none,
                                                       isCollapsed: true,
@@ -1902,6 +1990,24 @@ class _MapHomeScreenState extends State<MapHomeScreen>
               ],
             ),
             const SizedBox(height: 24),
+
+            // Feedback
+            ListTile(
+              leading: const Icon(Icons.feedback_outlined, color: Colors.white),
+              title: Text(
+                'Send Feedback',
+                style: GoogleFonts.poppins(color: Colors.white),
+              ),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              onTap: () {
+                Navigator.pop(ctx);
+                Navigator.push(context,
+                    MaterialPageRoute(
+                        builder: (_) => const FeedbackScreen()));
+              },
+            ),
 
             // Reset map
             ListTile(

@@ -34,6 +34,13 @@ class AuthProvider extends ChangeNotifier {
         await prefs.setString('user_name', name);
         await prefs.setString('user_mobile', mobile);
         
+        // Set success message based on login source
+        if (result['source'] == 'demo') {
+          _errorMessage = 'Connected in demo mode - API unavailable';
+        } else {
+          _errorMessage = null; // Clear any previous error
+        }
+        
         _isLoading = false;
         notifyListeners();
         return true;
