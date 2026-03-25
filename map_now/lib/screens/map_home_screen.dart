@@ -7,6 +7,7 @@ import '../providers/map_provider.dart';
 import '../providers/auth_provider.dart';
 import '../models/place_model.dart';
 import 'location_search_screen.dart';
+import 'map_picker_screen.dart';
 import 'navigation_screen.dart';
 import 'feedback_screen.dart';
 import 'widgets/pulsing_marker.dart';
@@ -288,10 +289,39 @@ class _MapHomeScreenState extends State<MapHomeScreen>
     );
   }
 
+  /// Build context markers from current provider state.
+  /// [exclude] can be 'start', 'destination', or 'stop:N' to skip the point being edited.
+  List<ExistingMarker> _buildExistingMarkers({String? exclude}) {
+    final mp = Provider.of<MapProvider>(context, listen: false);
+    final markers = <ExistingMarker>[];
+    if (mp.startLocation != null && exclude != 'start') {
+      markers.add(ExistingMarker(
+        point: LatLng(mp.startLocation!.latitude, mp.startLocation!.longitude),
+        color: const Color(0xFFB1FF8E),
+      ));
+    }
+    for (int i = 0; i < mp.stops.length; i++) {
+      if (exclude == 'stop:$i') continue;
+      markers.add(ExistingMarker(
+        point: LatLng(mp.stops[i].latitude, mp.stops[i].longitude),
+        color: const Color(0xFF64B5F6),
+        label: '${i + 1}',
+      ));
+    }
+    if (mp.destination != null && exclude != 'destination') {
+      markers.add(ExistingMarker(
+        point: LatLng(mp.destination!.latitude, mp.destination!.longitude),
+        color: const Color(0xFFFF4444),
+      ));
+    }
+    return markers;
+  }
+
   Future<void> _openLocationSearch({
     required String label,
     required TextEditingController controller,
     required Function(PlaceModel) onSelected,
+    List<ExistingMarker> existingMarkers = const [],
   }) async {
     final result = await Navigator.push<PlaceModel>(
       context,
@@ -299,6 +329,7 @@ class _MapHomeScreenState extends State<MapHomeScreen>
         builder: (_) => LocationSearchScreen(
           fieldLabel: label,
           initialValue: controller.text,
+          existingMarkers: existingMarkers,
         ),
       ),
     );
@@ -308,6 +339,18 @@ class _MapHomeScreenState extends State<MapHomeScreen>
       });
       onSelected(result);
       _fitMapToPoints();
+
+      // Auto-recalculate route when start or destination changes while route panel is open
+      if (_showRoutePanel) {
+        final mp = Provider.of<MapProvider>(context, listen: false);
+        if (mp.startLocation != null && mp.destination != null) {
+          if (mp.stops.isNotEmpty) {
+            mp.calculateChainedRoute();
+          } else {
+            mp.findDirectRoute();
+          }
+        }
+      }
     }
   }
 
@@ -458,8 +501,9 @@ class _MapHomeScreenState extends State<MapHomeScreen>
     final result = await Navigator.push<PlaceModel>(
       context,
       MaterialPageRoute(
-        builder: (_) => const LocationSearchScreen(
+        builder: (_) => LocationSearchScreen(
           fieldLabel: 'Add Stop',
+          existingMarkers: _buildExistingMarkers(),
         ),
       ),
     );
@@ -561,18 +605,6 @@ class _MapHomeScreenState extends State<MapHomeScreen>
 
   List<Marker> _buildMarkers(MapProvider mapProvider) {
     List<Marker> markers = [];
-
-    // Current user location "me" marker
-    if (mapProvider.userLocation != null) {
-      markers.add(
-        Marker(
-          point: mapProvider.userLocation!,
-          width: 30,
-          height: 30,
-          child: _buildMeMarker(),
-        ),
-      );
-    }
 
     // Start marker
     if (mapProvider.startLocation != null) {
@@ -776,8 +808,8 @@ class _MapHomeScreenState extends State<MapHomeScreen>
           FlutterMap(
             mapController: _mapController,
             options: MapOptions(
-              initialCenter: const LatLng(12.9716, 77.5946),
-              initialZoom: 14,
+              initialCenter: mapProvider.userLocation ?? const LatLng(20, 0),
+              initialZoom: mapProvider.userLocation != null ? 15.0 : 2.0,
               minZoom: 3,
               maxZoom: 18,
             ),
@@ -803,31 +835,83 @@ class _MapHomeScreenState extends State<MapHomeScreen>
             ],
           ),
 
+          // ── GPS loading indicator (top-center) ──
+          if (mapProvider.locationLoading && mapProvider.userLocation == null)
+            Positioned(
+              top: topPadding + 14,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF212121),
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.3),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          color: Color(0xFFB1FF8E),
+                          strokeWidth: 2,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Text(
+                        'Finding your location...',
+                        style: GoogleFonts.poppins(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w400,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
           // ── Hamburger menu button (top-left) ──
           Positioned(
             top: topPadding + 12,
             left: 14,
-            child: GestureDetector(
-              onTap: mapProvider.isLoading ? null : () => _showProfileMenu(context),
-              child: Container(
-                width: 46,
-                height: 46,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF212121),
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.3),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: mapProvider.isLoading ? null : () => _showProfileMenu(context),
+                borderRadius: BorderRadius.circular(12),
+                splashColor: Colors.white.withOpacity(0.15),
+                highlightColor: Colors.white.withOpacity(0.08),
+                child: Ink(
+                  width: 46,
+                  height: 46,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF212121),
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.3),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: const Center(
+                    child: Icon(
+                      Icons.menu,
+                      color: Colors.white,
+                      size: 22,
                     ),
-                  ],
-                ),
-                child: const Center(
-                  child: Icon(
-                    Icons.menu,
-                    color: Colors.white,
-                    size: 22,
                   ),
                 ),
               ),
@@ -839,37 +923,43 @@ class _MapHomeScreenState extends State<MapHomeScreen>
             Positioned(
             right: 20,
             bottom: 170,
-            child: GestureDetector(
-              onTap: mapProvider.isLoading ? null : () {
-                // Re-center on user location with animation
-                if (mapProvider.userLocation != null) {
-                  _animatedMapMove(mapProvider.userLocation!, 15);
-                  _mapController.rotate(0);
-                } else {
-                  _mapController.rotate(0);
-                  mapProvider.getUserLocation();
-                }
-              },
-              child: Container(
-                width: 51,
-                height: 51,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.white,
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.3),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: mapProvider.isLoading ? null : () {
+                  // Re-center on user location with animation
+                  if (mapProvider.userLocation != null) {
+                    _animatedMapMove(mapProvider.userLocation!, 15);
+                    _mapController.rotate(0);
+                  } else {
+                    _mapController.rotate(0);
+                    mapProvider.getUserLocation();
+                  }
+                },
+                customBorder: const CircleBorder(),
+                splashColor: Colors.black.withOpacity(0.12),
+                highlightColor: Colors.black.withOpacity(0.06),
+                child: Ink(
+                  width: 51,
+                  height: 51,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.white,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.3),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Center(
+                    child: Image.asset(
+                      'assets/compass_icon.png',
+                      width: 36,
+                      height: 36,
+                      fit: BoxFit.contain,
                     ),
-                  ],
-                ),
-                child: Center(
-                  child: Image.asset(
-                    'assets/compass_icon.png',
-                    width: 36,
-                    height: 36,
-                    fit: BoxFit.contain,
                   ),
                 ),
               ),
@@ -881,9 +971,14 @@ class _MapHomeScreenState extends State<MapHomeScreen>
             Positioned(
               right: 12,
               bottom: 80,
-              child: GestureDetector(
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
                 onTap: mapProvider.isLoading ? null : _openNavPanel,
-                child: Container(
+                customBorder: const CircleBorder(),
+                splashColor: Colors.black.withOpacity(0.15),
+                highlightColor: Colors.black.withOpacity(0.08),
+                child: Ink(
                 width: 72,
                 height: 72,
                 decoration: BoxDecoration(
@@ -923,6 +1018,7 @@ class _MapHomeScreenState extends State<MapHomeScreen>
                     ),
                   ),
                 ),
+              ),
               ),
             ),
           ),
@@ -971,9 +1067,18 @@ class _MapHomeScreenState extends State<MapHomeScreen>
               right: 0,
               child: SlideTransition(
                 position: _minimizedPanelSlideAnimation,
-                child: GestureDetector(
-                  onTap: mapProvider.isLoading ? null : _expandRoutePanel,
-                  child: _buildMinimizedRoutePanel(),
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: mapProvider.isLoading ? null : _expandRoutePanel,
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(16),
+                      topRight: Radius.circular(16),
+                    ),
+                    splashColor: Colors.white.withOpacity(0.08),
+                    highlightColor: Colors.white.withOpacity(0.04),
+                    child: _buildMinimizedRoutePanel(),
+                  ),
                 ),
               ),
             ),
@@ -1069,6 +1174,26 @@ class _MapHomeScreenState extends State<MapHomeScreen>
                         fontWeight: FontWeight.w500,
                       ),
                     ),
+                    Container(
+                      width: 1,
+                      height: 14,
+                      margin: const EdgeInsets.symmetric(horizontal: 10),
+                      color: Colors.white.withOpacity(0.3),
+                    ),
+                    const Icon(
+                      Icons.access_time,
+                      color: Color(0xFFB1FF8E),
+                      size: 16,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      mapProvider.optimizedRoute!.etaLabel,
+                      style: GoogleFonts.poppins(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -1130,21 +1255,26 @@ class _MapHomeScreenState extends State<MapHomeScreen>
                           color: Colors.white,
                         ),
                       ),
-                      GestureDetector(
-                        onTap: mapProvider.isLoading ? null : _closeNavPanel,
-                        child: Container(
-                          width: 20,
-                          height: 20,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: Colors.white.withValues(alpha: 0.15),
-                          ),
-                          child: Transform.rotate(
-                            angle: 0.785398, // 45 degrees
-                            child: const Icon(
-                              Icons.add,
-                              size: 14,
-                              color: Colors.white,
+                      Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: mapProvider.isLoading ? null : _closeNavPanel,
+                          customBorder: const CircleBorder(),
+                          splashColor: Colors.white.withOpacity(0.2),
+                          child: Ink(
+                            width: 20,
+                            height: 20,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Colors.white.withValues(alpha: 0.15),
+                            ),
+                            child: Transform.rotate(
+                              angle: 0.785398, // 45 degrees
+                              child: const Icon(
+                                Icons.add,
+                                size: 14,
+                                color: Colors.white,
+                              ),
                             ),
                           ),
                         ),
@@ -1219,6 +1349,7 @@ class _MapHomeScreenState extends State<MapHomeScreen>
                                 onTap: () => _openLocationSearch(
                                   label: 'Your Location',
                                   controller: _locationController,
+                                  existingMarkers: _buildExistingMarkers(exclude: 'start'),
                                   onSelected: (place) {
                                     final mp = Provider.of<MapProvider>(context, listen: false);
                                     mp.setStartLocation(place);
@@ -1262,6 +1393,7 @@ class _MapHomeScreenState extends State<MapHomeScreen>
                                 onTap: () => _openLocationSearch(
                                   label: 'Your Destination',
                                   controller: _destinationController,
+                                  existingMarkers: _buildExistingMarkers(exclude: 'destination'),
                                   onSelected: (place) {
                                     final mp = Provider.of<MapProvider>(context, listen: false);
                                     mp.setDestination(place);
@@ -1310,24 +1442,30 @@ class _MapHomeScreenState extends State<MapHomeScreen>
                 final hasStart = _locationController.text.trim().isNotEmpty || mp.userLocation != null;
                 final isEnabled = hasStart &&
                     _destinationController.text.trim().isNotEmpty;
-                return GestureDetector(
-                  onTap: isEnabled ? _onFindRoute : null,
-                  child: Opacity(
-                    opacity: isEnabled ? 1.0 : 0.35,
-                    child: Container(
-                      width: double.infinity,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFB1FF8E),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Center(
-                        child: Text(
-                          'Find Route',
-                          style: GoogleFonts.poppins(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w500,
-                            color: Colors.black,
+                return Opacity(
+                  opacity: isEnabled ? 1.0 : 0.35,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: isEnabled ? _onFindRoute : null,
+                      borderRadius: BorderRadius.circular(12),
+                      splashColor: Colors.black.withOpacity(0.15),
+                      highlightColor: Colors.black.withOpacity(0.08),
+                      child: Ink(
+                        width: double.infinity,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFB1FF8E),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Center(
+                          child: Text(
+                            'Find Route',
+                            style: GoogleFonts.poppins(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
+                              color: Colors.black,
+                            ),
                           ),
                         ),
                       ),
@@ -1445,6 +1583,9 @@ class _MapHomeScreenState extends State<MapHomeScreen>
                                                       controller: isStart 
                                                           ? _locationController 
                                                           : (isDest ? _destinationController : _stopControllers[stopIndex]),
+                                                      existingMarkers: _buildExistingMarkers(
+                                                        exclude: isStart ? 'start' : (isDest ? 'destination' : 'stop:$stopIndex'),
+                                                      ),
                                                       onSelected: (place) {
                                                         final mp = Provider.of<MapProvider>(context, listen: false);
                                                         if (isStart) {
@@ -1535,73 +1676,87 @@ class _MapHomeScreenState extends State<MapHomeScreen>
                     ),
                   ),
 
-                  // ── Optimise Route + Add Stop buttons ──
+                  // ── Action buttons ──
                   Padding(
                     padding: const EdgeInsets.fromLTRB(12, 10, 12, 16),
                     child: Column(
                       children: [
                         Row(
                           children: [
-                            // Optimise Route (left) — enabled only when stops need optimization
-                            Expanded(
-                              child: Builder(
-                                builder: (context) {
-                                  final mp = Provider.of<MapProvider>(context);
-                                  final canOptimize = mp.stopsNeedOptimization;
-                                  return GestureDetector(
-                                    onTap: canOptimize
-                                        ? () {
-                                            final mp = Provider.of<MapProvider>(context, listen: false);
-                                            mp.optimizeRoute();
-                                          }
-                                        : null,
-                                    child: Opacity(
+                            // Optimise Route — only shown when there are stops
+                            if (_stopControllers.isNotEmpty)
+                              Expanded(
+                                child: Builder(
+                                  builder: (context) {
+                                    final mp = Provider.of<MapProvider>(context);
+                                    final canOptimize = mp.stopsNeedOptimization;
+                                    return Opacity(
                                       opacity: canOptimize ? 1.0 : 0.35,
-                                      child: Container(
-                                        height: 48,
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFFB1FF8E),
+                                      child: Material(
+                                        color: Colors.transparent,
+                                        child: InkWell(
+                                          onTap: canOptimize
+                                              ? () {
+                                                  final mp = Provider.of<MapProvider>(context, listen: false);
+                                                  mp.optimizeRoute();
+                                                }
+                                              : null,
                                           borderRadius: BorderRadius.circular(12),
-                                        ),
-                                        child: Center(
-                                          child: Text(
-                                            'Optimise Route',
-                                            style: GoogleFonts.poppins(
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.w500,
-                                              color: Colors.black,
+                                          splashColor: Colors.black.withOpacity(0.15),
+                                          highlightColor: Colors.black.withOpacity(0.08),
+                                          child: Ink(
+                                            height: 48,
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xFFB1FF8E),
+                                              borderRadius: BorderRadius.circular(12),
+                                            ),
+                                            child: Center(
+                                              child: Text(
+                                                'Optimise Route',
+                                                style: GoogleFonts.poppins(
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.w500,
+                                                  color: Colors.black,
+                                                ),
+                                              ),
                                             ),
                                           ),
                                         ),
                                       ),
-                                    ),
-                                  );
-                                },
+                                    );
+                                  },
+                                ),
                               ),
-                            ),
-                            const SizedBox(width: 10),
-                            // Add Stop (right) — disabled at 3 stops
+                            if (_stopControllers.isNotEmpty)
+                              const SizedBox(width: 10),
+                            // Add Stop — takes full width when no stops exist
                             Expanded(
                               child: Builder(
                                 builder: (context) {
                                   final canAdd = _stopControllers.length < 3;
-                                  return GestureDetector(
-                                    onTap: canAdd ? _addStop : null,
-                                    child: Opacity(
-                                      opacity: canAdd ? 1.0 : 0.35,
-                                      child: Container(
-                                        height: 48,
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFFB1FF8E),
-                                          borderRadius: BorderRadius.circular(12),
-                                        ),
-                                        child: Center(
-                                          child: Text(
-                                            'Add Stop +',
-                                            style: GoogleFonts.poppins(
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.w500,
-                                              color: Colors.black,
+                                  return Opacity(
+                                    opacity: canAdd ? 1.0 : 0.35,
+                                    child: Material(
+                                      color: Colors.transparent,
+                                      child: InkWell(
+                                        onTap: canAdd ? _addStop : null,
+                                        borderRadius: BorderRadius.circular(12),
+                                        splashColor: Colors.black.withOpacity(0.15),
+                                        highlightColor: Colors.black.withOpacity(0.08),
+                                        child: Ink(
+                                          height: 48,
+                                          decoration: BoxDecoration(
+                                            color: const Color(0xFFB1FF8E),
+                                            borderRadius: BorderRadius.circular(12),
+                                          ),
+                                          child: Center(
+                                            child: Text(
+                                              'Add Stop +',
+                                              style: GoogleFonts.poppins(
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w500,
+                                                color: Colors.black,
+                                              ),
                                             ),
                                           ),
                                         ),
@@ -1615,64 +1770,91 @@ class _MapHomeScreenState extends State<MapHomeScreen>
                         ),
 
                         // ── Start Navigation Button (full width) ──
-                        if (mapProvider.optimizedRoute != null && mapProvider.isUserLocationPartOfRoute) ...[
+                        if (mapProvider.optimizedRoute != null) ...[
                           const SizedBox(height: 12),
-                          GestureDetector(
-                            onTap: () {
-                              final mp = Provider.of<MapProvider>(context, listen: false);
-                              if (mp.destination == null) return;
-                              
-                              // Check if user is at correct location before starting navigation
-                              if (!mp.isUserLocationPartOfRoute) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      'You must be at the start or destination location to begin navigation',
-                                      style: GoogleFonts.poppins(),
+                          // Show "too far" hint if user isn't near the route
+                          if (!mapProvider.isUserLocationPartOfRoute)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.info_outline, color: Colors.orange.shade300, size: 14),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    'Move closer to the start or destination to begin',
+                                    style: GoogleFonts.poppins(
+                                      color: Colors.orange.shade300,
+                                      fontSize: 11,
                                     ),
-                                    backgroundColor: Colors.redAccent,
                                   ),
-                                );
-                                return;
-                              }
-                              
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (_) => NavigationScreen(
-                                    route: mp.optimizedRoute!,
-                                    startPosition: mp.userLocation!,
-                                    destination: mp.destination!,
-                                    startLocation: mp.startLocation,
-                                  ),
-                                ),
-                              );
-                            },
-                            child: Container(
-                              width: double.infinity,
-                              height: 54,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFB1FF8E),
-                                borderRadius: BorderRadius.circular(12),
+                                ],
                               ),
-                              child: Center(
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    const Icon(
-                                      Icons.navigation,
-                                      color: Colors.black,
-                                      size: 20,
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Text(
-                                      'Start Navigation',
-                                      style: GoogleFonts.poppins(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w600,
-                                        color: Colors.black,
+                            ),
+                          Opacity(
+                            opacity: mapProvider.isUserLocationPartOfRoute ? 1.0 : 0.4,
+                            child: Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: () {
+                                  final mp = Provider.of<MapProvider>(context, listen: false);
+                                  if (mp.destination == null) return;
+                                  
+                                  if (!mp.isUserLocationPartOfRoute) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                          'You must be at the start or destination to begin navigation',
+                                          style: GoogleFonts.poppins(),
+                                        ),
+                                        backgroundColor: Colors.orange.shade700,
+                                      ),
+                                    );
+                                    return;
+                                  }
+                                  
+                                  Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (_) => NavigationScreen(
+                                        route: mp.optimizedRoute!,
+                                        startPosition: mp.userLocation!,
+                                        destination: mp.destination!,
+                                        startLocation: mp.startLocation,
                                       ),
                                     ),
-                                  ],
+                                  );
+                                },
+                                borderRadius: BorderRadius.circular(12),
+                                splashColor: Colors.black.withOpacity(0.15),
+                                highlightColor: Colors.black.withOpacity(0.08),
+                                child: Ink(
+                                  width: double.infinity,
+                                  height: 54,
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFB1FF8E),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Center(
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const Icon(
+                                          Icons.navigation,
+                                          color: Colors.black,
+                                          size: 20,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          'Start Navigation',
+                                          style: GoogleFonts.poppins(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w600,
+                                            color: Colors.black,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
@@ -1691,36 +1873,41 @@ class _MapHomeScreenState extends State<MapHomeScreen>
               left: 0,
               right: 0,
               child: Center(
-                child: GestureDetector(
-                  onTap: _closeRoutePanel,
-                  child: Container(
-                    width: 42,
-                    height: 42,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: const Color(0xFFB1FF8E),
-                      boxShadow: [
-                        BoxShadow(
-                          color: const Color(0xFFB1FF8E).withValues(alpha: 0.35),
-                          blurRadius: 12,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                    child: Center(
-                      child: Transform.rotate(
-                        angle: 0.785398,
-                        child: Container(
-                          width: 20,
-                          height: 20,
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(3),
-                            border: Border.all(color: const Color(0xFF171717), width: 2),
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: _closeRoutePanel,
+                    customBorder: const CircleBorder(),
+                    splashColor: Colors.black.withOpacity(0.15),
+                    child: Ink(
+                      width: 42,
+                      height: 42,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: const Color(0xFFB1FF8E),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFFB1FF8E).withValues(alpha: 0.35),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
                           ),
-                          child: Center(
-                            child: Transform.rotate(
-                              angle: -0.785398,
-                              child: const Icon(Icons.turn_right, color: Color(0xFF171717), size: 11),
+                        ],
+                      ),
+                      child: Center(
+                        child: Transform.rotate(
+                          angle: 0.785398,
+                          child: Container(
+                            width: 20,
+                            height: 20,
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(3),
+                              border: Border.all(color: const Color(0xFF171717), width: 2),
+                            ),
+                            child: Center(
+                              child: Transform.rotate(
+                                angle: -0.785398,
+                                child: const Icon(Icons.turn_right, color: Color(0xFF171717), size: 11),
+                              ),
                             ),
                           ),
                         ),
@@ -1853,68 +2040,99 @@ class _MapHomeScreenState extends State<MapHomeScreen>
                     Builder(
                       builder: (context) {
                         final mp = Provider.of<MapProvider>(context);
-                        if (mp.optimizedRoute != null && mp.isUserLocationPartOfRoute) {
-                          return Padding(
-                            padding: const EdgeInsets.only(top: 12),
-                            child: GestureDetector(
-                              onTap: () {
-                                if (mp.destination == null) return;
-                                
-                                // Check if user is at correct location before starting navigation
-                                if (!mp.isUserLocationPartOfRoute) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                        'You must be at the start or destination location to begin navigation',
-                                        style: GoogleFonts.poppins(),
-                                      ),
-                                      backgroundColor: Colors.redAccent,
-                                    ),
-                                  );
-                                  return;
-                                }
-                                
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => NavigationScreen(
-                                      route: mp.optimizedRoute!,
-                                      startPosition: mp.userLocation!,
-                                      destination: mp.destination!,
-                                      startLocation: mp.startLocation,
-                                    ),
-                                  ),
-                                );
-                              },
-                              child: Container(
-                                width: double.infinity,
-                                height: 48,
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFB1FF8E),
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Center(
+                        if (mp.optimizedRoute != null) {
+                          final canStart = mp.isUserLocationPartOfRoute;
+                          return Column(
+                            children: [
+                              if (!canStart)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 8),
                                   child: Row(
-                                    mainAxisSize: MainAxisSize.min,
+                                    mainAxisAlignment: MainAxisAlignment.center,
                                     children: [
-                                      const Icon(
-                                        Icons.navigation,
-                                        color: Colors.black,
-                                        size: 18,
-                                      ),
-                                      const SizedBox(width: 8),
+                                      Icon(Icons.info_outline, color: Colors.orange.shade300, size: 13),
+                                      const SizedBox(width: 5),
                                       Text(
-                                        'Start Navigation',
+                                        'Move closer to start or destination',
                                         style: GoogleFonts.poppins(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w600,
-                                          color: Colors.black,
+                                          color: Colors.orange.shade300,
+                                          fontSize: 11,
                                         ),
                                       ),
                                     ],
                                   ),
                                 ),
+                              Padding(
+                                padding: const EdgeInsets.only(top: 12),
+                                child: Opacity(
+                                  opacity: canStart ? 1.0 : 0.4,
+                                  child: Material(
+                                    color: Colors.transparent,
+                                    child: InkWell(
+                                      onTap: () {
+                                        if (mp.destination == null) return;
+                                        
+                                        if (!mp.isUserLocationPartOfRoute) {
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            SnackBar(
+                                              content: Text(
+                                                'You must be at the start or destination to begin navigation',
+                                                style: GoogleFonts.poppins(),
+                                              ),
+                                              backgroundColor: Colors.orange.shade700,
+                                            ),
+                                          );
+                                          return;
+                                        }
+                                        
+                                        Navigator.of(context).push(
+                                          MaterialPageRoute(
+                                            builder: (_) => NavigationScreen(
+                                              route: mp.optimizedRoute!,
+                                              startPosition: mp.userLocation!,
+                                              destination: mp.destination!,
+                                              startLocation: mp.startLocation,
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                      borderRadius: BorderRadius.circular(12),
+                                      splashColor: Colors.black.withOpacity(0.15),
+                                      highlightColor: Colors.black.withOpacity(0.08),
+                                      child: Ink(
+                                        width: double.infinity,
+                                        height: 48,
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFFB1FF8E),
+                                          borderRadius: BorderRadius.circular(12),
+                                        ),
+                                        child: Center(
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              const Icon(
+                                                Icons.navigation,
+                                                color: Colors.black,
+                                                size: 18,
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Text(
+                                                'Start Navigation',
+                                                style: GoogleFonts.poppins(
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.w600,
+                                                  color: Colors.black,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
                               ),
-                            ),
+                            ],
                           );
                         }
                         return const SizedBox.shrink();
@@ -1972,31 +2190,36 @@ class _MapHomeScreenState extends State<MapHomeScreen>
             Positioned(
               top: -18,
               left: 16,
-              child: GestureDetector(
-                onTap: _resetNavigation,
-                child: Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: const Color(0xFF333333),
-                    border: Border.all(
-                      color: const Color(0xFF4B4B4B),
-                      width: 1,
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.4),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: _resetNavigation,
+                  customBorder: const CircleBorder(),
+                  splashColor: Colors.white.withOpacity(0.2),
+                  child: Ink(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: const Color(0xFF333333),
+                      border: Border.all(
+                        color: const Color(0xFF4B4B4B),
+                        width: 1,
                       ),
-                    ],
-                  ),
-                  child: const Center(
-                    child: Icon(
-                      Icons.close,
-                      color: Colors.white,
-                      size: 18,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.4),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: const Center(
+                      child: Icon(
+                        Icons.close,
+                        color: Colors.white,
+                        size: 18,
+                      ),
                     ),
                   ),
                 ),
@@ -2181,8 +2404,35 @@ class _MapHomeScreenState extends State<MapHomeScreen>
                 borderRadius: BorderRadius.circular(12),
               ),
               onTap: () {
-                mapProvider.reset();
                 Navigator.pop(ctx);
+                showDialog(
+                  context: context,
+                  builder: (_) => AlertDialog(
+                    backgroundColor: const Color(0xFF292929),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    title: Text('Reset Map?',
+                        style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.w600)),
+                    content: Text(
+                      'This will clear your route, stops, and all map data.',
+                      style: GoogleFonts.poppins(color: Colors.white70, fontSize: 14),
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: Text('Cancel',
+                            style: GoogleFonts.poppins(color: Colors.white54)),
+                      ),
+                      TextButton(
+                        onPressed: () {
+                          mapProvider.reset();
+                          Navigator.pop(context);
+                        },
+                        child: Text('Reset',
+                            style: GoogleFonts.poppins(color: Colors.redAccent)),
+                      ),
+                    ],
+                  ),
+                );
               },
             ),
 
@@ -2197,9 +2447,36 @@ class _MapHomeScreenState extends State<MapHomeScreen>
                 borderRadius: BorderRadius.circular(12),
               ),
               onTap: () {
-                authProvider.logout();
                 Navigator.pop(ctx);
-                Navigator.of(context).pushReplacementNamed('/welcome');
+                showDialog(
+                  context: context,
+                  builder: (_) => AlertDialog(
+                    backgroundColor: const Color(0xFF292929),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    title: Text('Logout?',
+                        style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.w600)),
+                    content: Text(
+                      'Are you sure you want to log out?',
+                      style: GoogleFonts.poppins(color: Colors.white70, fontSize: 14),
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: Text('Cancel',
+                            style: GoogleFonts.poppins(color: Colors.white54)),
+                      ),
+                      TextButton(
+                        onPressed: () {
+                          authProvider.logout();
+                          Navigator.pop(context);
+                          Navigator.of(context).pushReplacementNamed('/welcome');
+                        },
+                        child: Text('Logout',
+                            style: GoogleFonts.poppins(color: Colors.redAccent)),
+                      ),
+                    ],
+                  ),
+                );
               },
             ),
             const SizedBox(height: 16),

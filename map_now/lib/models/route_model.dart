@@ -12,6 +12,19 @@ class RouteModel {
   // Convert distance from meters to kilometers
   double get distanceInKm => distance / 1000;
 
+  /// Estimated travel time in minutes (assuming ~30 km/h average city driving)
+  double get estimatedMinutes => (distanceInKm / 30.0) * 60.0;
+
+  /// Human-readable ETA string (e.g. "12 min", "1 hr 5 min")
+  String get etaLabel {
+    final mins = estimatedMinutes.round();
+    if (mins < 1) return '< 1 min';
+    if (mins < 60) return '$mins min';
+    final hrs = mins ~/ 60;
+    final rem = mins % 60;
+    return rem == 0 ? '$hrs hr' : '$hrs hr $rem min';
+  }
+
   factory RouteModel.fromJson(Map<String, dynamic> json) {
     // Parse [[lat, lng], [lat, lng], ...] format
     List<List<double>> parseCoordArray(dynamic coords) {

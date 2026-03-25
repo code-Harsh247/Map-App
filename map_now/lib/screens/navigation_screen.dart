@@ -54,6 +54,7 @@ class _NavigationScreenState extends State<NavigationScreen>
   final Duration _rerouteDelay = const Duration(seconds: 5); // Reroute after 5 seconds
   bool _isRecalculating = false;
   double _remainingDistance = 0.0; // Real-time distance updates
+  bool _hasArrived = false; // Prevents repeated arrival dialogs
   
   bool _mapReady = false; // Add map readiness flag
 
@@ -216,6 +217,16 @@ class _NavigationScreenState extends State<NavigationScreen>
   // --- Route Logic: Trimming & Recalculation ---
 
   /// Calculate total remaining distance in KM
+  /// Format remaining distance (km) into an ETA string (~30 km/h)
+  String _formatEta(double distKm) {
+    final mins = ((distKm / 30.0) * 60.0).round();
+    if (mins < 1) return '< 1 min';
+    if (mins < 60) return '~$mins min';
+    final hrs = mins ~/ 60;
+    final rem = mins % 60;
+    return rem == 0 ? '~$hrs hr' : '~$hrs hr $rem min';
+  }
+
   double _calculateRemainingDistance(LatLng currentPos, List<LatLng> path) {
     if (path.isEmpty) return 0.0;
     
@@ -257,6 +268,21 @@ class _NavigationScreenState extends State<NavigationScreen>
   
   void _checkRouteStatus() async {
     if (_originalPath.isEmpty) return;
+
+    // 0. Arrival detection — check distance to destination
+    if (!_hasArrived) {
+      final distToDest = const Distance().as(
+        LengthUnit.Meter,
+        _currentLocation,
+        LatLng(widget.destination.latitude, widget.destination.longitude),
+      );
+      if (distToDest <= 50) {
+        _hasArrived = true;
+        _positionStreamSubscription?.pause();
+        if (mounted) _showArrivalDialog();
+        return;
+      }
+    }
 
     // 1. Find nearest point on original route  
     final nearestIndex = _findNearestPointIndex(_currentLocation, _originalPath);
@@ -305,6 +331,50 @@ class _NavigationScreenState extends State<NavigationScreen>
           }
       }
     }
+  }
+
+  void _showArrivalDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF292929),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            const Icon(Icons.flag_circle, color: Color(0xFFB1FF8E), size: 28),
+            const SizedBox(width: 10),
+            Text(
+              'You have arrived!',
+              style: GoogleFonts.poppins(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+                fontSize: 18,
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          widget.destination.fullAddress,
+          style: GoogleFonts.poppins(color: Colors.grey.shade400, fontSize: 14),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              Navigator.of(context).pop(); // Exit navigation
+            },
+            child: Text(
+              'Finish',
+              style: GoogleFonts.poppins(
+                color: const Color(0xFFB1FF8E),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _recalculateRoute() async {
@@ -504,9 +574,23 @@ class _NavigationScreenState extends State<NavigationScreen>
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                         Text("Follow the route", style: GoogleFonts.poppins(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600)),
-                        Text(
-                            "${_remainingDistance.toStringAsFixed(1)} km remaining",
-                            style: GoogleFonts.poppins(color: Colors.grey, fontSize: 14)
+                        Row(
+                          children: [
+                            Text(
+                                "${_remainingDistance.toStringAsFixed(1)} km",
+                                style: GoogleFonts.poppins(color: Colors.grey, fontSize: 14)
+                            ),
+                            Container(
+                              width: 1,
+                              height: 12,
+                              margin: const EdgeInsets.symmetric(horizontal: 8),
+                              color: Colors.grey.withOpacity(0.4),
+                            ),
+                            Text(
+                                _formatEta(_remainingDistance),
+                                style: GoogleFonts.poppins(color: const Color(0xFFB1FF8E), fontSize: 14, fontWeight: FontWeight.w500),
+                            ),
+                          ],
                         ),
                         ],
                     ),
@@ -582,7 +666,48 @@ class _NavigationScreenState extends State<NavigationScreen>
                 FloatingActionButton(
                   heroTag: 'close_nav',
                   backgroundColor: Colors.redAccent,
-                  onPressed: () => Navigator.of(context).pop(),
+                  onPressed: () {
+                    showDialog(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        backgroundColor: const Color(0xFF292929),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                        title: Text(
+                          'End Navigation?',
+                          style: GoogleFonts.poppins(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        content: Text(
+                          'Are you sure you want to stop navigating?',
+                          style: GoogleFonts.poppins(color: Colors.grey.shade400),
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.of(ctx).pop(),
+                            child: Text(
+                              'Cancel',
+                              style: GoogleFonts.poppins(color: Colors.grey),
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: () {
+                              Navigator.of(ctx).pop();
+                              Navigator.of(context).pop();
+                            },
+                            child: Text(
+                              'End',
+                              style: GoogleFonts.poppins(
+                                color: Colors.redAccent,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
                   child: const Icon(Icons.close, color: Colors.white),
                 ),
               ],

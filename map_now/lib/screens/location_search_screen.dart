@@ -1,20 +1,25 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:geocoding/geocoding.dart' as geo;
 import '../models/place_model.dart';
 import '../services/geocoding_service.dart';
 import '../services/search_history_service.dart';
+import 'map_picker_screen.dart';
 
 /// Full-screen search overlay.
 /// Returns [PlaceModel] via Navigator.pop when the user selects a suggestion.
 class LocationSearchScreen extends StatefulWidget {
   final String fieldLabel;
   final String? initialValue;
+  final List<ExistingMarker> existingMarkers;
 
   const LocationSearchScreen({
     super.key,
     required this.fieldLabel,
     this.initialValue,
+    this.existingMarkers = const [],
   });
 
   @override
@@ -125,6 +130,99 @@ class _LocationSearchScreenState extends State<LocationSearchScreen> {
     }
   }
 
+  Future<void> _useCurrentLocation() async {
+    try {
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+      );
+      // Reverse geocode to get a readable address
+      String address = 'Current Location';
+      try {
+        final placemarks = await geo.placemarkFromCoordinates(
+          position.latitude,
+          position.longitude,
+        );
+        if (placemarks.isNotEmpty) {
+          final p = placemarks.first;
+          final parts = <String>[
+            if (p.street != null && p.street!.isNotEmpty) p.street!,
+            if (p.subLocality != null && p.subLocality!.isNotEmpty) p.subLocality!,
+            if (p.locality != null && p.locality!.isNotEmpty) p.locality!,
+          ];
+          if (parts.isNotEmpty) address = parts.join(', ');
+        }
+      } catch (_) {}
+
+      if (!mounted) return;
+      final place = PlaceModel(
+        fullAddress: address,
+        latitude: position.latitude,
+        longitude: position.longitude,
+        placeId: 'current_location',
+      );
+      await _addToHistory(place);
+      if (!mounted) return;
+      Navigator.pop(context, place);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not get location. Check GPS permissions.',
+              style: GoogleFonts.poppins()),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
+  }
+
+  Future<void> _openMapPicker() async {
+    final result = await Navigator.push<PlaceModel>(
+      context,
+      MaterialPageRoute(builder: (_) => MapPickerScreen(existingMarkers: widget.existingMarkers)),
+    );
+    if (result != null && mounted) {
+      await _addToHistory(result);
+      if (!mounted) return;
+      Navigator.pop(context, result);
+    }
+  }
+
+  Widget _buildQuickActionTile({
+    required IconData icon,
+    required Color iconColor,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: iconColor.withOpacity(0.15),
+              ),
+              child: Icon(icon, color: iconColor, size: 20),
+            ),
+            const SizedBox(width: 14),
+            Text(
+              label,
+              style: GoogleFonts.poppins(
+                color: Colors.white,
+                fontSize: 14,
+                fontWeight: FontWeight.w400,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final topPadding = MediaQuery.of(context).padding.top;
@@ -150,19 +248,24 @@ class _LocationSearchScreenState extends State<LocationSearchScreen> {
                 // Back button + label
                 Row(
                   children: [
-                    GestureDetector(
-                      onTap: () => Navigator.pop(context),
-                      child: Container(
-                        width: 32,
-                        height: 32,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Colors.white.withValues(alpha: 0.1),
-                        ),
-                        child: const Icon(
-                          Icons.arrow_back,
-                          color: Colors.white,
-                          size: 18,
+                    Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        onTap: () => Navigator.pop(context),
+                        customBorder: const CircleBorder(),
+                        splashColor: Colors.white.withOpacity(0.2),
+                        child: Ink(
+                          width: 32,
+                          height: 32,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.white.withValues(alpha: 0.1),
+                          ),
+                          child: const Icon(
+                            Icons.arrow_back,
+                            color: Colors.white,
+                            size: 18,
+                          ),
                         ),
                       ),
                     ),
@@ -205,19 +308,23 @@ class _LocationSearchScreenState extends State<LocationSearchScreen> {
                         size: 20,
                       ),
                       suffixIcon: _controller.text.isNotEmpty
-                          ? GestureDetector(
-                              onTap: () {
-                                _controller.clear();
-                                setState(() {
-                                  _results = [];
-                                  _error = null;
-                                  _loadHistory(); // Reload history on clear
-                                });
-                              },
-                              child: Icon(
-                                Icons.close,
-                                color: Colors.white.withValues(alpha: 0.5),
-                                size: 18,
+                          ? Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: () {
+                                  _controller.clear();
+                                  setState(() {
+                                    _results = [];
+                                    _error = null;
+                                    _loadHistory(); // Reload history on clear
+                                  });
+                                },
+                                customBorder: const CircleBorder(),
+                                child: Icon(
+                                  Icons.close,
+                                  color: Colors.white.withValues(alpha: 0.5),
+                                  size: 18,
+                                ),
                               ),
                             )
                           : null,
@@ -235,46 +342,69 @@ class _LocationSearchScreenState extends State<LocationSearchScreen> {
             ),
           ),
 
-          // ── Results or History ──
+          // ── Quick actions + Results or History ──
           Expanded(
-            child: _isLoading
-                ? const Center(
-                    child: CircularProgressIndicator(
-                      color: Color(0xFFB1FF8E),
-                      strokeWidth: 2,
-                    ),
-                  )
-                : _error != null
-                    ? Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(24),
-                          child: Text(
-                            _error!,
-                            style: GoogleFonts.poppins(
-                              color: Colors.red[300],
-                              fontSize: 13,
-                            ),
-                            textAlign: TextAlign.center,
+            child: Column(
+              children: [
+                // Quick-action tiles (always visible when not loading)
+                if (!_isLoading) ...[
+                  _buildQuickActionTile(
+                    icon: Icons.my_location,
+                    iconColor: const Color(0xFFB1FF8E),
+                    label: 'Use Current Location',
+                    onTap: _useCurrentLocation,
+                  ),
+                  _buildQuickActionTile(
+                    icon: Icons.map_outlined,
+                    iconColor: const Color(0xFF82B1FF),
+                    label: 'Pick on Map',
+                    onTap: _openMapPicker,
+                  ),
+                  Divider(color: Colors.white.withValues(alpha: 0.08), height: 1),
+                ],
+                // Content area
+                Expanded(
+                  child: _isLoading
+                      ? const Center(
+                          child: CircularProgressIndicator(
+                            color: Color(0xFFB1FF8E),
+                            strokeWidth: 2,
                           ),
-                        ),
-                      )
-                    : (showHistory
-                        ? _buildHistoryList()
-                        : _results.isEmpty
-                            ? Center(
+                        )
+                      : _error != null
+                          ? Center(
+                              child: Padding(
+                                padding: const EdgeInsets.all(24),
                                 child: Text(
-                                  _controller.text.isEmpty
-                                      ? 'Type to search for a location'
-                                      : _controller.text.length < 3 
-                                        ? 'Type at least 3 characters' 
-                                        : 'No results found',
+                                  _error!,
                                   style: GoogleFonts.poppins(
-                                    color: Colors.white.withValues(alpha: 0.4),
+                                    color: Colors.red[300],
                                     fontSize: 13,
                                   ),
+                                  textAlign: TextAlign.center,
                                 ),
-                              )
-                            : _buildResultsList()),
+                              ),
+                            )
+                          : (showHistory
+                              ? _buildHistoryList()
+                              : _results.isEmpty
+                                  ? Center(
+                                      child: Text(
+                                        _controller.text.isEmpty
+                                            ? 'Type to search for a location'
+                                            : _controller.text.length < 3 
+                                              ? 'Type at least 3 characters' 
+                                              : 'No results found',
+                                        style: GoogleFonts.poppins(
+                                          color: Colors.white.withValues(alpha: 0.4),
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                    )
+                                  : _buildResultsList()),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -298,14 +428,22 @@ class _LocationSearchScreenState extends State<LocationSearchScreen> {
                   fontWeight: FontWeight.w500,
                 ),
               ),
-              GestureDetector(
-                onTap: _clearAllHistory,
-                child: Text(
-                  'Clear All',
-                  style: GoogleFonts.poppins(
-                    color: const Color(0xFFB1FF8E),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
+              Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: _clearAllHistory,
+                  borderRadius: BorderRadius.circular(8),
+                  splashColor: const Color(0xFFB1FF8E).withOpacity(0.2),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                    child: Text(
+                      'Clear All',
+                      style: GoogleFonts.poppins(
+                        color: const Color(0xFFB1FF8E),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -343,12 +481,20 @@ class _LocationSearchScreenState extends State<LocationSearchScreen> {
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
-                trailing: GestureDetector(
-                  onTap: () => _deleteHistoryItem(index),
-                  child: Icon(
-                    Icons.close,
-                    color: Colors.white.withValues(alpha: 0.3),
-                    size: 16,
+                trailing: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: () => _deleteHistoryItem(index),
+                    customBorder: const CircleBorder(),
+                    splashColor: Colors.white.withOpacity(0.15),
+                    child: Padding(
+                      padding: const EdgeInsets.all(4),
+                      child: Icon(
+                        Icons.close,
+                        color: Colors.white.withValues(alpha: 0.3),
+                        size: 16,
+                      ),
+                    ),
                   ),
                 ),
                 onTap: () {

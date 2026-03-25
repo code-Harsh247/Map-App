@@ -89,31 +89,18 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     if (!mounted) return;
     setState(() => _isSubmitting = false);
 
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => AlertDialog(
-        backgroundColor: const Color(0xFF292929),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('Thank you!',
-            style: GoogleFonts.poppins(
-                color: Colors.white, fontWeight: FontWeight.w600)),
+    // Show a toast and auto-navigate back (avoids stale state if user presses Android back)
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
         content: Text(
-          'Your feedback has been submitted. We appreciate you taking the time!',
-          style: GoogleFonts.poppins(color: Colors.white70),
+          'Thank you! Your feedback has been submitted.',
+          style: GoogleFonts.poppins(),
         ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context); // close dialog
-              Navigator.pop(context); // close feedback screen
-            },
-            child: Text('Done',
-                style: GoogleFonts.poppins(color: const Color(0xFFB1FF8E))),
-          ),
-        ],
+        backgroundColor: const Color(0xFF2E7D32),
+        duration: const Duration(seconds: 3),
       ),
     );
+    Navigator.pop(context);
   }
 
   @override
@@ -191,17 +178,22 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: List.generate(5, (i) {
                 final star = i + 1;
-                return GestureDetector(
-                  onTap: _isSubmitting ? null : () => setState(() => _rating = star),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 150),
-                    padding: const EdgeInsets.symmetric(horizontal: 6),
-                    child: Icon(
-                      star <= _rating ? Icons.star_rounded : Icons.star_outline_rounded,
-                      color: star <= _rating
-                          ? const Color(0xFFFFD54F)
-                          : Colors.white24,
-                      size: 40,
+                return Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: _isSubmitting ? null : () => setState(() => _rating = star),
+                    customBorder: const CircleBorder(),
+                    splashColor: const Color(0xFFFFD54F).withOpacity(0.2),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      child: Icon(
+                        star <= _rating ? Icons.star_rounded : Icons.star_outline_rounded,
+                        color: star <= _rating
+                            ? const Color(0xFFFFD54F)
+                            : Colors.white24,
+                        size: 48,
+                      ),
                     ),
                   ),
                 );
@@ -235,31 +227,39 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
               runSpacing: 8,
               children: _categories.map((cat) {
                 final selected = _category == cat;
-                return GestureDetector(
-                  onTap: _isSubmitting ? null : () => setState(() => _category = cat),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 150),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: selected
-                          ? const Color(0xFFB1FF8E)
-                          : const Color(0xFF292929),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
+                return Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: _isSubmitting ? null : () => setState(() => _category = cat),
+                    borderRadius: BorderRadius.circular(20),
+                    splashColor: selected
+                        ? Colors.black.withOpacity(0.12)
+                        : Colors.white.withOpacity(0.1),
+                    child: Ink(
+                      decoration: BoxDecoration(
                         color: selected
                             ? const Color(0xFFB1FF8E)
-                            : Colors.white12,
+                            : const Color(0xFF292929),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: selected
+                              ? const Color(0xFFB1FF8E)
+                              : Colors.white12,
+                        ),
                       ),
-                    ),
-                    child: Text(
-                      cat,
-                      style: GoogleFonts.poppins(
-                        color: selected ? Colors.black : Colors.white70,
-                        fontSize: 13,
-                        fontWeight: selected
-                            ? FontWeight.w500
-                            : FontWeight.w400,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 8),
+                        child: Text(
+                          cat,
+                          style: GoogleFonts.poppins(
+                            color: selected ? Colors.black : Colors.white70,
+                            fontSize: 13,
+                            fontWeight: selected
+                                ? FontWeight.w500
+                                : FontWeight.w400,
+                          ),
+                        ),
                       ),
                     ),
                   ),
