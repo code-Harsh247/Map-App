@@ -5,7 +5,6 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:provider/provider.dart';
 import 'package:flutter_compass/flutter_compass.dart';
 import '../models/route_model.dart';
 import '../models/place_model.dart';
@@ -35,8 +34,10 @@ class _NavigationScreenState extends State<NavigationScreen>
   final RoutingService _routingService = RoutingService();
   
   // Navigation Path
-  late List<LatLng> _currentPath;
+  late List<LatLng> _originalPath; // Keep the full original path
+  late List<LatLng> _currentPath; // For backward compatibility
   RouteModel? _activeRoute;
+  int _progressIndex = 0; // Track how far along the path we've traveled
 
   // Navigation State
   late LatLng _currentLocation;
@@ -47,7 +48,10 @@ class _NavigationScreenState extends State<NavigationScreen>
   
   // Off-route Detection
   int _offRouteCounter = 0;
-  final double _offRouteThreshold = 100.0; // meters
+  final double _offRouteThreshold = 20.0; // meters - reduced from 100m
+  final double _progressThreshold = 10.0; // meters - new threshold for progress updates
+  DateTime? _offRouteStartTime; // Track when user went off-route
+  final Duration _rerouteDelay = const Duration(seconds: 5); // Reroute after 5 seconds
   bool _isRecalculating = false;
   double _remainingDistance = 0.0; // Real-time distance updates
   
@@ -75,10 +79,12 @@ class _NavigationScreenState extends State<NavigationScreen>
   void initState() {
     super.initState();
     _activeRoute = widget.route;
-    _currentPath = widget.route.path.map((e) => LatLng(e[0], e[1])).toList();
+    _originalPath = widget.route.path.map((e) => LatLng(e[0], e[1])).toList();
+    _currentPath = List.from(_originalPath); // Copy for backward compatibility
     _currentLocation = widget.startPosition;
     _markerPosition = widget.startPosition;
     _remainingDistance = widget.route.distanceInKm;
+    _progressIndex = 0;
 
     // Setup animation controller for smoothing updates
     _markerAnimController = AnimationController(
@@ -250,38 +256,48 @@ class _NavigationScreenState extends State<NavigationScreen>
   }
   
   void _checkRouteStatus() async {
-    if (_currentPath.isEmpty) return;
+    if (_originalPath.isEmpty) return;
 
-    // 1. Find nearest point on current route
-    final nearestIndex = _findNearestPointIndex(_currentLocation, _currentPath);
+    // 1. Find nearest point on original route  
+    final nearestIndex = _findNearestPointIndex(_currentLocation, _originalPath);
     if (nearestIndex == -1) return;
 
-    final nearestPoint = _currentPath[nearestIndex];
+    final nearestPoint = _originalPath[nearestIndex];
     final distanceToRoute = const Distance().as(LengthUnit.Meter, _currentLocation, nearestPoint);
 
-    // 2. Off-Route Check
+    // 2. Off-Route Check with time-based rerouting
     if (distanceToRoute > _offRouteThreshold) {
-      _offRouteCounter++;
-      if (_offRouteCounter >= 3) {
-        // Trigger recalculation
-        _offRouteCounter = 0;
+      // User is off-route
+      _offRouteStartTime ??= DateTime.now(); // Start tracking off-route time
+      
+      final offRouteDuration = DateTime.now().difference(_offRouteStartTime!);
+      if (offRouteDuration >= _rerouteDelay) {
+        // Trigger recalculation after 5 seconds off-route
+        _offRouteStartTime = null;
         await _recalculateRoute();
       }
     } else {
-      _offRouteCounter = 0;
+      // User is on-route
+      _offRouteStartTime = null; // Reset off-route timer
       
-      // 3. Trim Tail (Moving along route)
-      // Only trim if we have passed points (nearest index > 0)
-      if (nearestIndex > 0) {
+      // 3. Update Progress only if close to route (within 10m) AND moved forward
+      if (distanceToRoute <= _progressThreshold && nearestIndex > _progressIndex) {
         if (mounted) {
           setState(() {
-            _currentPath = _currentPath.sublist(nearestIndex);
+            _progressIndex = nearestIndex;
+            // Update current path for remaining distance calculation
+            _currentPath = _originalPath.sublist(_progressIndex);
             // Update Remaining Distance
             _remainingDistance = _calculateRemainingDistance(_currentLocation, _currentPath);
           });
+          
+          // Debug output
+          if (kDebugMode) {
+            print('[Navigation] Progress updated: $_progressIndex/${_originalPath.length} (${(_progressIndex / _originalPath.length * 100).toStringAsFixed(1)}%)');
+          }
         }
       } else {
-         // Even if we didn't trim, update distance based on current location to nearest point + rest
+         // Even if we didn't update progress, recalculate distance
           if (mounted) {
              setState(() {
                  _remainingDistance = _calculateRemainingDistance(_currentLocation, _currentPath);
@@ -315,7 +331,10 @@ class _NavigationScreenState extends State<NavigationScreen>
               setState(() {
                   _remainingDistance = newRoute.distanceInKm;
                   _activeRoute = newRoute;
-                  _currentPath = newRoute.path.map((e) => LatLng(e[0], e[1])).toList();
+                  _originalPath = newRoute.path.map((e) => LatLng(e[0], e[1])).toList();
+                  _currentPath = List.from(_originalPath);
+                  _progressIndex = 0;
+                  _offRouteStartTime = null; // Reset off-route tracking
                   // Reset simulation index if simulating
                   if (_isSimulating) _simulationIndex = 0; 
               });
@@ -350,8 +369,8 @@ class _NavigationScreenState extends State<NavigationScreen>
         return;
       }
 
-      // Logic refactored to use _currentPath instead of widget.route.path
-      if (_simulationIndex >= _currentPath.length - 1) {
+      // Logic refactored to use _originalPath instead of _currentPath
+      if (_simulationIndex >= _originalPath.length - 1) {
          // Stop at end
          timer.cancel();
          if (mounted) timer.cancel();
@@ -359,25 +378,11 @@ class _NavigationScreenState extends State<NavigationScreen>
          return;
       }
       
-      // Use local simulation index. However, since path changes (gets trimmed), 
-      // index 0 is always "current nearest".
-      // So if we trim, we should always move from 0 to 1?
-      // Actually, if we trim, the path gets shorter. 
-      // Let's simplified simulation: Just move through points.
-      // If path is trimmed, _simulationIndex needs adjustment or reset?
+      // Simple simulation: move through original path points
+      if (_originalPath.length < 2) return;
       
-      // Simple Approach: Simulation updates _currentLocation.
-      // Main loop trims path.
-      // So simulation should just pick "next point after current location distance"?
-      // For now, let's keep it dumb: Simulation forces location to Path[i], 
-      // Main loop will trim Path[0...i].
-      // So Path becomes shorter. 
-      // We should always simulate moving to Path[1] (since Path[0] is roughly where we are).
-      
-      if (_currentPath.length < 2) return;
-      
-      final current = _currentPath[0];
-      final next = _currentPath[1];
+      final current = _originalPath[_simulationIndex];
+      final next = _originalPath[_simulationIndex + 1];
 
       final bearing = Geolocator.bearingBetween(
         current.latitude, current.longitude, 
@@ -386,10 +391,10 @@ class _NavigationScreenState extends State<NavigationScreen>
 
       _updatePosition(next, bearing);
       
-      // Trim the point we just passed
+      // Update simulation index instead of removing points
       if (mounted) {
         setState(() {
-          _currentPath.removeAt(0);
+          _simulationIndex++;
         });
       }
     });
@@ -423,17 +428,26 @@ class _NavigationScreenState extends State<NavigationScreen>
             ),
             children: [
               TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                urlTemplate: 'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
                 userAgentPackageName: 'com.example.map_now',
               ),
-              // Route Line
+              // Route Lines - Traversed (Grey) and Remaining (Green)
               PolylineLayer(
                 polylines: [
-                  Polyline(
-                    points: _currentPath,
-                    color: Colors.blueAccent,
-                    strokeWidth: 6.0,
-                  ),
+                  // Traversed path (grey) - show from start to current progress
+                  if (_progressIndex > 0 && _originalPath.length > 1)
+                    Polyline(
+                      points: _originalPath.sublist(0, _progressIndex + 1),
+                      color: Colors.grey.withOpacity(0.7),
+                      strokeWidth: 6.0,
+                    ),
+                  // Remaining path (green) - show from current progress to end  
+                  if (_progressIndex < _originalPath.length - 1)
+                    Polyline(
+                      points: _originalPath.sublist(_progressIndex),
+                      color: const Color(0xFFB1FF8E),
+                      strokeWidth: 6.0,
+                    ),
                 ],
               ),
               // Current Position Marker
@@ -455,7 +469,7 @@ class _NavigationScreenState extends State<NavigationScreen>
                       alignment: Alignment.center,
                       child: const Icon(
                         Icons.navigation,
-                        color: Colors.blue, 
+                        color: Color(0xFFB1FF8E), 
                         size: 40,
                       )
                     ),
@@ -517,8 +531,8 @@ class _NavigationScreenState extends State<NavigationScreen>
                     if (_mapReady) _mapController.rotate(0);
                 },
                 child: Transform.rotate(
-                    angle: _mapReady ? (_mapController.camera.rotation * (3.14159 / 180)) : 0,
-                    child: const Icon(Icons.explore, color: Colors.redAccent),
+                    angle: -(_deviceHeading * (3.14159 / 180)),
+                    child: const Icon(Icons.explore, color: Color(0xFFB1FF8E)),
                 ),
               ),
           ),
@@ -537,16 +551,19 @@ class _NavigationScreenState extends State<NavigationScreen>
                     padding: const EdgeInsets.only(bottom: 16),
                     child: FloatingActionButton(
                       heroTag: 'simulate_btn',
-                      backgroundColor: _isSimulating ? Colors.green : Colors.orange,
+                      backgroundColor: _isSimulating ? const Color(0xFFB1FF8E) : const Color(0xFF444444),
                       onPressed: _toggleSimulation,
-                      child: Icon(_isSimulating ? Icons.pause : Icons.play_arrow),
+                      child: Icon(
+                        _isSimulating ? Icons.pause : Icons.play_arrow,
+                        color: _isSimulating ? Colors.black : Colors.white,
+                      ),
                     ),
                   ),
                   
                 // Re-center / Driver View Toggle
                 FloatingActionButton(
                   heroTag: 'recenter_btn',
-                  backgroundColor: _isNavigationActive ? Colors.blue : Colors.white,
+                  backgroundColor: _isNavigationActive ? const Color(0xFFB1FF8E) : Colors.white,
                   onPressed: () {
                     setState(() {
                       _isNavigationActive = true;
@@ -556,7 +573,7 @@ class _NavigationScreenState extends State<NavigationScreen>
                   },
                   child: Icon(
                     Icons.gps_fixed,
-                    color: _isNavigationActive ? Colors.white : Colors.black87,
+                    color: _isNavigationActive ? Colors.black : Colors.black87,
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -572,13 +589,60 @@ class _NavigationScreenState extends State<NavigationScreen>
             ),
           ),
           
-          // Recalculating Overlay
+          // Recalculating Route Overlay
           if (_isRecalculating)
-             Container(
-                 color: Colors.black.withOpacity(0.5),
-                 child: const Center(
-                     child: CircularProgressIndicator(color: Colors.white),
+             IgnorePointer(
+               child: Container(
+                 color: Colors.black.withOpacity(0.4),
+                 child: Center(
+                   child: Container(
+                     padding: const EdgeInsets.all(24),
+                     margin: const EdgeInsets.symmetric(horizontal: 40),
+                     decoration: BoxDecoration(
+                       color: const Color(0xFF212121),
+                       borderRadius: BorderRadius.circular(16),
+                       border: Border.all(
+                         color: const Color(0xFFB1FF8E).withOpacity(0.3),
+                         width: 1,
+                       ),
+                       boxShadow: [
+                         BoxShadow(
+                           color: Colors.black.withOpacity(0.3),
+                           blurRadius: 20,
+                           spreadRadius: 5,
+                           offset: const Offset(0, 10),
+                         ),
+                       ],
+                     ),
+                     child: Column(
+                       mainAxisSize: MainAxisSize.min,
+                       children: [
+                         const CircularProgressIndicator(
+                           color: Color(0xFFB1FF8E),
+                           strokeWidth: 3,
+                         ),
+                         const SizedBox(height: 16),
+                         Text(
+                           'Recalculating route',
+                           style: GoogleFonts.poppins(
+                             color: Colors.white,
+                             fontSize: 16,
+                             fontWeight: FontWeight.w500,
+                           ),
+                         ),
+                         const SizedBox(height: 4),
+                         Text(
+                           'Getting you back on track...',
+                           style: GoogleFonts.poppins(
+                             color: Colors.white.withOpacity(0.7),
+                             fontSize: 14,
+                           ),
+                         ),
+                       ],
+                     ),
+                   ),
                  ),
+               ),
              ),
         ],
       ),

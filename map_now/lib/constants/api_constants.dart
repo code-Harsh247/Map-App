@@ -8,9 +8,11 @@ class ApiConstants {
   static const String loginEndpoint = '/login/route';
   static const String geocodingEndpoint = '/addresses/search';
   static const String multiStopEndpoint = '/c-square/multistop';
+  static const String feedbackEndpoint = '/feedback';
 
   // Full URLs
   static String get loginUrl => '$mapsApiBaseUrl$loginEndpoint';
   static String get geocodingUrl => '$mapsBaseUrl$geocodingEndpoint';
   static String get multiStopUrl => '$routingBaseUrl$multiStopEndpoint';
+  static String get feedbackUrl => '$mapsApiBaseUrl$feedbackEndpoint';
 }

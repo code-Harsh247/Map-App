@@ -126,7 +126,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new,
               color: Colors.white, size: 18),
-          onPressed: () => Navigator.pop(context),
+          onPressed: _isSubmitting ? null : () => Navigator.pop(context),
         ),
         title: Text(
           'Send Feedback',
@@ -138,12 +138,15 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         ),
         centerTitle: true,
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // ── Header card ──
+      body: Stack(
+        children: [
+          // Main content
+          SingleChildScrollView(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // ── Header card ──
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(20),
@@ -189,7 +192,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
               children: List.generate(5, (i) {
                 final star = i + 1;
                 return GestureDetector(
-                  onTap: () => setState(() => _rating = star),
+                  onTap: _isSubmitting ? null : () => setState(() => _rating = star),
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 150),
                     padding: const EdgeInsets.symmetric(horizontal: 6),
@@ -233,7 +236,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
               children: _categories.map((cat) {
                 final selected = _category == cat;
                 return GestureDetector(
-                  onTap: () => setState(() => _category = cat),
+                  onTap: _isSubmitting ? null : () => setState(() => _category = cat),
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 150),
                     padding: const EdgeInsets.symmetric(
@@ -281,6 +284,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
               ),
               child: TextField(
                 controller: _commentController,
+                enabled: !_isSubmitting,
                 maxLines: 5,
                 style: GoogleFonts.poppins(
                     color: Colors.white, fontSize: 14),
@@ -334,6 +338,64 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
           ],
         ),
       ),
+      
+      // ── Loading overlay for feedback submission ──
+      if (_isSubmitting)
+        IgnorePointer(
+          child: Container(
+            color: Colors.black.withOpacity(0.4),
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.all(24),
+                margin: const EdgeInsets.symmetric(horizontal: 40),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF212121),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: const Color(0xFFB1FF8E).withOpacity(0.3),
+                    width: 1,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.3),
+                      blurRadius: 20,
+                      spreadRadius: 5,
+                      offset: const Offset(0, 10),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const CircularProgressIndicator(
+                      color: Color(0xFFB1FF8E),
+                      strokeWidth: 3,
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Submitting feedback',
+                      style: GoogleFonts.poppins(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Please wait...',
+                      style: GoogleFonts.poppins(
+                        color: Colors.white.withOpacity(0.7),
+                        fontSize: 14,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+    ],
+  ),
     );
   }
 }

@@ -41,6 +41,9 @@ class MapProvider extends ChangeNotifier {
   // User location
   LatLng? _userLocation;
   bool _locationLoading = false;
+  
+  // Authentication token
+  String? _token;
 
   // Getters
   MapController? get mapController => _mapController;
@@ -62,8 +65,45 @@ class MapProvider extends ChangeNotifier {
   bool _stopsNeedOptimization = false;
   bool get stopsNeedOptimization => _stopsNeedOptimization && _stops.isNotEmpty;
 
+  /// Check if the user's current location matches either start or destination
+  /// within a tolerance of 50 meters
+  bool get isUserLocationPartOfRoute {
+    if (_userLocation == null) return false;
+    
+    const double toleranceInMeters = 50.0;
+    
+    // Check if user location matches start location
+    if (_startLocation != null) {
+      final startDistance = Geolocator.distanceBetween(
+        _userLocation!.latitude,
+        _userLocation!.longitude,
+        _startLocation!.latitude,
+        _startLocation!.longitude,
+      );
+      if (startDistance <= toleranceInMeters) return true;
+    }
+    
+    // Check if user location matches destination
+    if (_destination != null) {
+      final destDistance = Geolocator.distanceBetween(
+        _userLocation!.latitude,
+        _userLocation!.longitude,
+        _destination!.latitude,
+        _destination!.longitude,
+      );
+      if (destDistance <= toleranceInMeters) return true;
+    }
+    
+    return false;
+  }
+
   void setMapController(MapController controller) {
     _mapController = controller;
+    notifyListeners();
+  }
+
+  void setToken(String? token) {
+    _token = token;
     notifyListeners();
   }
 
