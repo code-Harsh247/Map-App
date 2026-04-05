@@ -9,6 +9,10 @@ import 'package:flutter_compass/flutter_compass.dart';
 import '../models/route_model.dart';
 import '../models/place_model.dart';
 import '../services/routing_service.dart';
+import '../services/route_recorder_service.dart';
+import '../services/route_upload_service.dart';
+import '../providers/auth_provider.dart';
+import 'package:provider/provider.dart';
 
 class NavigationScreen extends StatefulWidget {
   final RouteModel route;
@@ -32,6 +36,8 @@ class _NavigationScreenState extends State<NavigationScreen>
     with TickerProviderStateMixin {
   final MapController _mapController = MapController();
   final RoutingService _routingService = RoutingService();
+  final RouteRecorderService _routeRecorder = RouteRecorderService();
+  final RouteUploadService _routeUploadService = RouteUploadService();
   
   // Navigation Path
   late List<LatLng> _originalPath; // Keep the full original path
@@ -126,6 +132,7 @@ class _NavigationScreenState extends State<NavigationScreen>
 
   @override
   void dispose() {
+    _routeRecorder.stop();
     _positionStreamSubscription?.cancel();
     _compassStreamSubscription?.cancel();
     _simulationTimer?.cancel();
@@ -159,6 +166,12 @@ class _NavigationScreenState extends State<NavigationScreen>
         _updatePosition(
           LatLng(position.latitude, position.longitude),
           position.heading,
+        );
+        // Record point for S3 upload
+        _routeRecorder.addPoint(
+          LatLng(position.latitude, position.longitude),
+          position.heading,
+          position.speed,
         );
       }
     });
@@ -362,7 +375,7 @@ class _NavigationScreenState extends State<NavigationScreen>
           TextButton(
             onPressed: () {
               Navigator.of(ctx).pop();
-              Navigator.of(context).pop(); // Exit navigation
+              _uploadAndExit();
             },
             child: Text(
               'Finish',
@@ -375,6 +388,48 @@ class _NavigationScreenState extends State<NavigationScreen>
         ],
       ),
     );
+  }
+
+  /// Stop recording, upload route data to S3, then exit navigation.
+  Future<void> _uploadAndExit() async {
+    _routeRecorder.stop();
+
+    // Build route info from the active route
+    final routeInfo = <String, dynamic>{
+      'distance': _activeRoute?.distance ?? widget.route.distance,
+      'path': (_activeRoute ?? widget.route).path,
+      'start': {
+        'lat': widget.startPosition.latitude,
+        'lng': widget.startPosition.longitude,
+        'address': widget.startLocation?.fullAddress,
+      },
+      'destination': {
+        'lat': widget.destination.latitude,
+        'lng': widget.destination.longitude,
+        'address': widget.destination.fullAddress,
+      },
+    };
+
+    // Get auth token
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final token = await authProvider.ensureToken();
+    final userId = authProvider.currentUser?.mobile ?? 'unknown';
+
+    if (token != null && _routeRecorder.points.isNotEmpty) {
+      final jsonData = _routeRecorder.toJson(
+        userId: userId,
+        routeInfo: routeInfo,
+      );
+
+      // Fire-and-forget upload — don't block the user
+      _routeUploadService.uploadRouteData(
+        token: token,
+        routeJson: jsonData,
+      );
+    }
+
+    _routeRecorder.reset();
+    if (mounted) Navigator.of(context).pop();
   }
 
   Future<void> _recalculateRoute() async {
@@ -694,7 +749,7 @@ class _NavigationScreenState extends State<NavigationScreen>
                           TextButton(
                             onPressed: () {
                               Navigator.of(ctx).pop();
-                              Navigator.of(context).pop();
+                              _uploadAndExit();
                             },
                             child: Text(
                               'End',
